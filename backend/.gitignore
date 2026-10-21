@@ -8,3 +8,4 @@ app/storage/
 
 # Kết quả chạy đánh giá RAG
 eval/results*.json
+eval/results*.partial.jsonl
