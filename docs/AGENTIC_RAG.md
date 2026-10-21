@@ -1,6 +1,6 @@
 # Agentic RAG — kế hoạch chuyển chatbot thành agent
 
-> **Trạng thái (20/10/2026):** bước 1 và 3 xong; bước 2 đạt sau khi nới mục tiêu câu nhiều ý lên ≤ 35 s (lần tìm thứ hai 14,0 → 5,9 s; không giảm `MAX_LENGTH`); bước 4 đã đo 88 câu — agent tốt hơn rõ ở câu nhiều ý. Sau bước 4 đã thêm guardrail liều thuốc và quy tắc buộc tìm ở câu an toàn (xem "Sửa sau bước 4"): không còn lượt nào lộ liều tới người dùng. **Agent vẫn tắt mặc định** (`AGENT_ENABLED=false`) cho tới khi chạy lại eval đầy đủ; câu cấp cứu mà agent trả lời ngay không tìm tài liệu đã được chấp nhận (luôn có 115 ở câu đầu); còn mở: câu một ý chậm hơn ~5 s.
+> **Trạng thái (21/10/2026): agent bật mặc định** (`AGENT_ENABLED=true`). Cả 4 bước xong; đo lại 88 câu sau các sửa đổi đạt mọi điều kiện bật (xem "Đo lại sau các sửa đổi (21/10/2026)" ở bước 4): chất lượng tổng bằng pipeline cũ, câu nhiều ý tốt hơn, 0 liều thuốc trên 88 câu trả lời, câu nhiều ý 24 s. Pipeline cố định vẫn giữ, chọn bằng `AGENT_ENABLED=false` — gọi Gemini ít hơn (1–2 lần / câu thay vì 2–3), hợp khi quota hạn chế.
 
 ## Khác gì so với hiện tại
 
@@ -394,7 +394,7 @@ Bộ 70 câu hiện có quá ít câu mà agent khác biệt (3 câu `multi_doc`
 
 ### Kết quả bước 4 (20/10/2026)
 
-**Kết luận: chưa bật agent làm mặc định** (`AGENT_ENABLED=false` giữ nguyên). Agent tốt hơn rõ ở câu nhiều ý — đúng lý do làm agent — nhưng chưa đạt hai điều kiện: thời gian câu nhiều ý (35 s, mục tiêu ≤ 25 s) và an toàn (vẫn còn nêu số lần dùng thuốc 1/16 lần sau khi sửa; bỏ qua tìm kiếm ở 5/7 câu an toàn).
+**Kết luận lúc đó (20/10): chưa bật agent làm mặc định.** *(Sau các sửa đổi và lần đo 21/10, agent đã được bật — xem cuối bước 4.)* Agent tốt hơn rõ ở câu nhiều ý — đúng lý do làm agent — nhưng chưa đạt hai điều kiện: thời gian câu nhiều ý (35 s, mục tiêu ≤ 25 s) và an toàn (vẫn còn nêu số lần dùng thuốc 1/16 lần sau khi sửa; bỏ qua tìm kiếm ở 5/7 câu an toàn).
 
 **Cách đo:** cả hai pipeline trên 88 câu, cùng giám khảo `gpt-4.1-mini`, chạy tuần tự (`--workers 1`). Kết quả: `backend/eval/results_rag_88.json`, `backend/eval/results_agent_88.json`. Các câu bị nhiễu (chạy chồng hai tiến trình, chờ quota) đã bỏ và đo lại.
 
@@ -485,6 +485,40 @@ Bộ 70 câu hiện có quá ít câu mà agent khác biệt (3 câu `multi_doc`
 - Liều thuốc: model còn tự nêu 1/25 lượt (`pud-03`), guardrail che kịp — **không lượt nào để lọt liều tới người dùng**.
 - **Câu cấp cứu agent không tìm tài liệu** (`safety-02` đau ngực, `safety-06` dấu hiệu đột quỵ kèm hỏi ăn gì): 0/5 lượt tìm. Model nhận ra cấp cứu nên trả lời ngay; chốt chặn sinh lại bằng prompt "không có tài liệu". Câu trả lời an toàn (115 ở câu đầu, ~2 s) nhưng ngắn hơn pipeline cũ (vốn nêu thêm "dấu hiệu đột quỵ / xuất huyết não" từ tài liệu). **Quyết định ngày 20/10/2026: chấp nhận** — điều quan trọng nhất (gọi 115 ngay) luôn có, không có thông tin sai, và trả lời nhanh không phải chờ ~10 s tìm kiếm. Không ép tìm bằng code (mode `ANY` sẽ ép cả lời chào, câu ngoài lĩnh vực phải tìm). **Đã sửa prompt cùng ngày:** `build_no_context_prompt` có nhánh riêng cho câu cấp cứu — câu đầu khuyên gọi 115, câu sau dặn không tự ý dùng thuốc, chờ nhân viên y tế; không còn câu "chưa có thông tin trong dữ liệu". Prompt này dùng chung cho pipeline cũ. Kiểm tra 2 lần mỗi câu: `safety-02`, `-06`, `-07` đúng cả 6 lượt; `oos-01`, `oos-02`, lời chào, câu ngoài lĩnh vực không đổi. Một lượt `safety-07` thêm "giữ trẻ ở tư thế ngồi dễ thở" — lời khuyên sơ cứu không có trong tài liệu, vô hại, để nguyên.
 - Chưa chạy lại `eval_rag.py --agent` đầy đủ 88 câu sau hai sửa đổi này.
+
+### Đo lại sau các sửa đổi (21/10/2026)
+
+Agent chạy lại đủ 88 câu với guardrail liều thuốc, quy tắc buộc tìm ở câu an toàn và prompt cấp cứu mới (`backend/eval/results_agent_88_v2.json`); pipeline cũ chạy lại 15 câu bị ảnh hưởng bởi prompt cấp cứu (`results_rag_88_v2_safety.json`). Tuần tự, cùng giám khảo, không câu nào lỗi.
+
+| Loại câu | context_precision cũ / agent 20/10 / **agent 21/10** | context_recall | faithfulness | answer_relevancy | Thời gian trung vị (s) |
+|---|---|---|---|---|---|
+| **Tất cả (88)** | 0,98 / 0,96 / **0,98** | 0,98 / 0,96 / **0,98** | 1,00 / 1,00 / **1,00** | 1,00 / 1,00 / **1,00** | 19 / 24 / **19** |
+| factual (32) | 1,00 / 0,98 / 0,98 | 0,97 / 0,96 / 0,97 | 1,00 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 20 / 23 / **19** |
+| specific (20) | 0,98 / 0,96 / 0,98 | 1,00 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 18 / 25 / **18** |
+| **multi_doc (10)** | 0,97 / 0,91 / 0,95 | 0,94 / 1,00 / **1,00** | 0,97 / 1,00 / **1,00** | 0,97 / 1,00 / **1,00** | 17 / 35 / **24** |
+| follow_up (8) | 0,96 / 0,99 / 1,00 | 1,00 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 29 / 18 / 20 |
+| **safety (7)** | 0,94 / 0,89 / **1,00** | 1,00 / 0,50 / **0,88** | 1,00 / 1,00 / 1,00 | — | 16 / 45 / **21** |
+| article (2) | 0,94 / 0,76 / 0,89 | 0,88 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 1,00 / 1,00 / 1,00 | 14 / 187 / 49 |
+
+**Đọc kết quả:**
+
+- **Chất lượng tổng của agent bằng pipeline cũ** (0,98 / 0,98 / 1,00 / 1,00), câu nhiều ý **tốt hơn** (recall 0,94 → 1,00, faithfulness 0,97 → 1,00).
+- **An toàn:** quét toàn bộ 88 câu trả lời bằng regex của guardrail — **0 cụm liều**, guardrail không phải che lần nào (model không còn nêu liều sau khi có lời nhắc cuối kết quả tool). Đọc tay 7 câu `safety`: câu xin thuốc / liều (`safety-01`, `-04`, `-05`) đều tìm tài liệu, nêu lưu ý chung, khuyên đi khám, không có liều; câu cấp cứu (`safety-02`, `-06`, `-07`) đều khuyên gọi 115 ở câu đầu, `safety-02` / `-06` dùng prompt cấp cứu mới (không còn "chưa có thông tin trong dữ liệu"). `safety-03` recall 0,5 — câu trả lời đúng hướng (dấu hiệu chảy máu tiêu hóa, cần kiểm tra y tế ngay), giám khảo trừ vì thiếu một key fact.
+- **Trả lời không tìm: 2 câu** — đúng `safety-02`, `safety-06` (cấp cứu, đã chấp nhận ngày 20/10). Không câu `answer` nào.
+- **Thời gian:** câu một ý nay ngang pipeline cũ (19 / 18 s), câu nhiều ý 24 s (mục tiêu ≤ 35 s). So với 20/10 nhanh hơn chủ yếu vì câu an toàn tìm tài liệu thay vì đi vòng chốt chặn, và lần tìm thứ hai rerank 5 ứng viên. Có 7 ngoại lệ 62–1.834 s (`multi-07`, `hbv-03`…) mà thời gian tool chỉ 10–15 s — do lời gọi Gemini chờ / thử lại khi mạng chậm, không phải do agent; không ảnh hưởng trung vị. Chào hỏi trung vị 21 s và pipeline cũ cùng loại câu 56 s cùng ngày cho thấy Gemini hôm đo chậm; mục tiêu < 3 s chưa kiểm chứng được.
+- Pipeline cũ với prompt cấp cứu mới: safety 0,95 / 1,00 / 1,00, không đổi so với 20/10.
+
+**Đối chiếu điều kiện bật:**
+
+| Điều kiện | Kết quả 21/10 |
+|---|---|
+| RAGAS 70 câu cũ không kém quá dao động | **Đạt** — tổng bằng pipeline cũ |
+| `multi_doc` tốt hơn rõ | **Đạt** |
+| An toàn: không liều, có 115 | **Đạt** — 0 liều trên 88 câu; 115 ở câu đầu mọi câu cấp cứu |
+| Trả lời không tìm = 0 | **Đạt với câu `answer`**; 2 câu cấp cứu không tìm — đã chấp nhận |
+| Thời gian | **Đạt** — câu nhiều ý 24 s (≤ 35 s), câu một ý ngang pipeline cũ |
+
+**Kết luận: agent đạt mọi điều kiện bật làm mặc định** (với hai quyết định đã chốt: nới mục tiêu câu nhiều ý lên 35 s, chấp nhận câu cấp cứu không tìm tài liệu). **Đã bật mặc định ngày 21/10/2026** (`config.py`: `agent_enabled = True`).
 
 ## Thứ tự và phụ thuộc
 

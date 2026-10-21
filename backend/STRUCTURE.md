@@ -83,7 +83,7 @@ routers/chat.py            — bọc vào ChatResponse { reply, sources, disclai
 Frontend hiển thị câu trả lời + danh sách nguồn
 ```
 
-Khi `AGENT_ENABLED=true`, `routers/chat.py` gọi `AgentService` thay cho `RagService`: Gemini tự quyết định gọi `search_medical_docs` / `get_article` (0 đến `AGENT_MAX_TOOL_CALLS` lần) rồi mới trả lời; không còn bước viết lại câu hỏi. Chi tiết: [../docs/AGENTIC_RAG.md](../docs/AGENTIC_RAG.md).
+Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `AgentService` thay cho `RagService`: Gemini tự quyết định gọi `search_medical_docs` / `get_article` (0 đến `AGENT_MAX_TOOL_CALLS` lần) rồi mới trả lời; không còn bước viết lại câu hỏi. Chi tiết: [../docs/AGENTIC_RAG.md](../docs/AGENTIC_RAG.md).
 
 ## Giải thích từng file
 
@@ -109,7 +109,7 @@ Khi `AGENT_ENABLED=true`, `routers/chat.py` gọi `AgentService` thay cho `RagSe
 
 ### `app/routers/chat.py`
 - `APIRouter(prefix="/api")` — mọi route trong file có tiền tố `/api`.
-- `_get_service()`: `AGENT_ENABLED=true` → `get_agent_service()`, ngược lại `get_rag_service()`. Hai service có cùng `ask` / `ask_stream`.
+- `_get_service()`: `AGENT_ENABLED=true` (mặc định) → `get_agent_service()`, `false` → `get_rag_service()`. Hai service có cùng `ask` / `ask_stream`.
 - `POST /api/chat`: gọi `service.ask(message, history)`, bọc kết quả vào `ChatResponse`. Frontend không dùng nữa; giữ cho script đánh giá và gọi API trực tiếp.
 - `POST /api/chat/stream` (frontend dùng): cùng body, trả `text/event-stream` từ `RagService.ask_stream`. Thứ tự sự kiện:
   - `status` `{stage}` — `rewriting` (chỉ khi có history) → `retrieving` → `generating`. Với agent: `thinking` → mỗi lần gọi tool một `retrieving` `{stage, query}` hoặc `reading` `{stage, document_id}` → `generating`

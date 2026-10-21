@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     query_rewrite_enabled: bool = True
     history_max_turns: int = 10
     # Agentic RAG (docs/AGENTIC_RAG.md): Gemini tự gọi tool tìm tài liệu thay cho pipeline cố định.
-    # Tắt mặc định cho tới khi qua bước đánh giá (bước 4).
-    agent_enabled: bool = False
+    # Bật mặc định từ 21/10/2026, sau khi đạt mọi điều kiện ở bước đánh giá (bước 4).
+    # false = pipeline cố định (viết lại câu hỏi → tìm 1 lần → trả lời), ít lần gọi Gemini hơn.
+    agent_enabled: bool = True
     agent_max_tool_calls: int = 3  # số lần search_medical_docs tối đa (mỗi lần 12–30 s vì rerank)
     # Từ lần tìm thứ hai trong một câu hỏi chỉ rerank N ứng viên (lần đầu: RERANK_CANDIDATES).
     agent_followup_rerank_candidates: int = 5
