@@ -13,7 +13,9 @@ def _get_client() -> OpenAI:
 	settings = get_settings()
 	if not settings.openai_api_key:
 		raise RuntimeError("Thiếu OPENAI_API_KEY để tạo embedding.")
-	return OpenAI(api_key=settings.openai_api_key)
+	# Mặc định SDK chờ tới 600 s mỗi lần gọi (× 3 lần thử) — khi mạng chập, một lần embed câu hỏi
+	# treo hàng chục phút. 30 s là quá đủ cho một request embedding / giám khảo bình thường.
+	return OpenAI(api_key=settings.openai_api_key, timeout=30.0, max_retries=2)
 
 
 def embed_texts(texts: Sequence[str]) -> list[list[float]]:

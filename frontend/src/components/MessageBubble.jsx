@@ -8,12 +8,14 @@ const MARKDOWN_COMPONENTS = {
 
 // Trạng thái backend gửi về trong lúc chưa có chữ nào (xem api/chatApi.js).
 const STATUS_TEXT = {
+  thinking: "Đang phân tích câu hỏi…",
   rewriting: "Đang phân tích câu hỏi…",
   retrieving: "Đang tìm tài liệu liên quan…",
+  reading: "Đang đọc bài viết…",
   generating: "Đang soạn câu trả lời…",
 };
 
-export default function MessageBubble({ role, content, isError, sources = [], pending, status }) {
+export default function MessageBubble({ role, content, isError, sources = [], pending, status, statusQuery }) {
   const isUser = role === "user";
   const isWaiting = pending && !content;
   // Câu trả lời của Gemini là markdown (**đậm**, danh sách…); tin nhắn người dùng và lỗi giữ nguyên văn.
@@ -31,7 +33,12 @@ export default function MessageBubble({ role, content, isError, sources = [], pe
         ].join(" ")}
       >
         {isWaiting ? (
-          <span className="message-status">{STATUS_TEXT[status] ?? STATUS_TEXT.generating}</span>
+          <span className="message-status">
+            {/* Agent gửi kèm truy vấn đang tìm (có thể tìm nhiều lần cho một câu hỏi). */}
+            {status === "retrieving" && statusQuery
+              ? `Đang tìm: “${statusQuery}”…`
+              : (STATUS_TEXT[status] ?? STATUS_TEXT.generating)}
+          </span>
         ) : renderMarkdown ? (
           <div className="message-content">
             <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>

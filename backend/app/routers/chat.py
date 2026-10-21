@@ -5,7 +5,9 @@ from collections.abc import Iterator
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.config import get_settings
 from app.schemas import ChatRequest, ChatResponse
+from app.services.agent_service import AgentService, get_agent_service
 from app.services.rag_service import RagService, get_rag_service
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -13,8 +15,11 @@ router = APIRouter(prefix="/api", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
-def _get_service() -> RagService:
+def _get_service() -> RagService | AgentService:
+    """AGENT_ENABLED chọn agent hoặc pipeline cố định; hai bên có cùng ask / ask_stream."""
     try:
+        if get_settings().agent_enabled:
+            return get_agent_service()
         return get_rag_service()
     except RuntimeError as exc:  # thiếu API key, chưa cài thư viện...
         raise HTTPException(status_code=500, detail=str(exc)) from exc

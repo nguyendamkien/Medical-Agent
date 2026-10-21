@@ -18,13 +18,17 @@ def build_context(results: list[dict[str, Any]]) -> str:
 	for result in results:
 		metadata = result.get("metadata", {})
 		index = numbers.setdefault(source_key(metadata), len(numbers) + 1)
-		blocks.append(
-			f"[Nguồn {index}] {metadata.get('title', '')} | "
-			f"Mục: {metadata.get('section', '')}\n"
-			f"Nội dung: {result.get('text', '')}\n"
-			f"URL: {metadata.get('url', '')}"
-		)
+		blocks.append(format_chunk(result, index))
 	return "\n\n".join(blocks)
+
+
+def format_chunk(result: dict[str, Any], index: int, with_document_id: bool = False) -> str:
+	"""Một chunk trong CONTEXT. `with_document_id`: kèm id bài để agent gọi được get_article."""
+	metadata = result.get("metadata", {})
+	header = f"[Nguồn {index}] {metadata.get('title', '')} | Mục: {metadata.get('section', '')}"
+	if with_document_id:
+		header += f" | document_id: {metadata.get('document_id', '')}"
+	return f"{header}\nNội dung: {result.get('text', '')}\nURL: {metadata.get('url', '')}"
 
 
 def build_rag_prompt(question: str, context: str) -> str:
@@ -51,15 +55,25 @@ CÂU HỎI:
 def build_no_context_prompt(question: str) -> str:
 	"""Prompt khi retrieve không ra chunk nào. Tách riêng khỏi build_rag_prompt vì với
 	prompt chung, Gemini vẫn nói "chưa tìm thấy" nhưng kể thêm triệu chứng / yếu tố tiên
-	lượng lấy từ kiến thức của nó — thông tin không có nguồn."""
+	lượng lấy từ kiến thức của nó — thông tin không có nguồn.
+
+	Câu cấp cứu có nhánh riêng: agent thường trả lời ngay mà không tìm tài liệu (đã chấp nhận,
+	docs/AGENTIC_RAG.md), nên câu trả lời đi qua prompt này — câu "chưa có thông tin trong dữ
+	liệu" ở đó nghe lạc lõng và làm loãng lời khuyên gọi 115."""
 	return f"""Cơ sở dữ liệu KHÔNG có tài liệu nào liên quan đến câu hỏi dưới đây.
 
 Hãy trả lời bằng tiếng Việt, tối đa 3 câu:
+- Nếu là lời chào, lời cảm ơn hoặc hỏi bạn làm được gì: đáp lại ngắn gọn, giới thiệu \
+bạn hỗ trợ thông tin tham khảo về sức khỏe và mời đặt câu hỏi.
 - Nếu câu hỏi không thuộc lĩnh vực sức khỏe: lịch sự cho biết bạn chỉ hỗ trợ các vấn đề \
 liên quan đến sức khỏe.
-- Nếu câu hỏi về sức khỏe: nói rõ hiện chưa có thông tin về chủ đề này trong dữ liệu, \
-khuyên hỏi bác sĩ hoặc đến cơ sở y tế; nếu câu hỏi gợi ý tình trạng khẩn cấp, khuyên \
-gọi 115 hoặc đến cơ sở y tế gần nhất ngay.
+- Nếu câu hỏi mô tả dấu hiệu cấp cứu (đau ngực dữ dội, khó thở nặng, tím tái, méo \
+miệng / yếu liệt nửa người, chảy máu nhiều, mất ý thức...): câu ĐẦU TIÊN khuyên gọi ngay \
+cấp cứu 115 hoặc đưa đến cơ sở y tế gần nhất; câu sau có thể dặn không tự ý dùng thuốc \
+và chờ nhân viên y tế. KHÔNG nói "chưa có thông tin trong dữ liệu" — với cấp cứu, việc \
+cần làm là gọi 115, không phải tra cứu.
+- Nếu câu hỏi khác về sức khỏe: nói rõ hiện chưa có thông tin về chủ đề này trong dữ \
+liệu, khuyên hỏi bác sĩ hoặc đến cơ sở y tế.
 - KHÔNG nêu bất kỳ triệu chứng, nguyên nhân, con số, thuốc, phương pháp điều trị hay \
 yếu tố tiên lượng nào — kể cả để làm ví dụ hoặc đặt trong ngoặc.
 

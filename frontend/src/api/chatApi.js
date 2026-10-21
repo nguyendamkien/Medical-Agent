@@ -7,7 +7,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
  * @param {string} message - Câu hỏi của người dùng.
  * @param {{role: "user"|"model", content: string}[]} history - Lịch sử hội thoại trước đó.
  * @param {object} handlers
- * @param {(stage: "rewriting"|"retrieving"|"generating") => void} [handlers.onStatus]
+ * @param {(stage: "thinking"|"rewriting"|"retrieving"|"reading"|"generating", data: object) => void} [handlers.onStatus]
+ *   `data` là cả sự kiện; với agent, `retrieving` kèm `query` đang tìm.
  * @param {(sources: object[]) => void} [handlers.onSources]
  * @param {(text: string) => void} [handlers.onDelta] - Từng đoạn câu trả lời mới.
  * @returns {Promise<void>} Resolve khi nhận sự kiện `done`; reject khi lỗi.
@@ -38,7 +39,7 @@ export async function streamChatMessage(message, history, { onStatus, onSources,
       const { event, data } = parseEvent(buffer.slice(0, boundary));
       buffer = buffer.slice(boundary + 2);
 
-      if (event === "status") onStatus?.(data.stage);
+      if (event === "status") onStatus?.(data.stage, data);
       else if (event === "sources") onSources?.(data.sources);
       else if (event === "delta") onDelta?.(data.text);
       else if (event === "error") throw new Error(data.detail);

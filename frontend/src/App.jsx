@@ -76,13 +76,13 @@ function App() {
 
     try {
       await streamChatMessage(text, history, {
-        onStatus: (stage) => updateReply((m) => ({ ...m, status: stage })),
+        onStatus: (stage, data) => updateReply((m) => ({ ...m, status: stage, statusQuery: data.query })),
         onSources: (sources) => updateReply((m) => ({ ...m, sources })),
         onDelta: (delta) => updateReply((m) => ({ ...m, content: m.content + delta })),
       });
-      updateReply(({ pending: _pending, status: _status, ...m }) => m);
+      updateReply(({ pending: _pending, status: _status, statusQuery: _statusQuery, ...m }) => m);
     } catch (error) {
-      updateReply(({ pending: _pending, status: _status, ...m }) =>
+      updateReply(({ pending: _pending, status: _status, statusQuery: _statusQuery, ...m }) =>
         m.content
           ? // Đã có một phần câu trả lời: giữ lại, ghi chú bị ngắt.
             { ...m, content: `${m.content}\n\n*(Câu trả lời bị gián đoạn: ${error.message})*` }
@@ -136,6 +136,7 @@ function App() {
                 sources={message.sources}
                 pending={message.pending}
                 status={message.status}
+                statusQuery={message.statusQuery}
               />
             ))}
             <div ref={messagesEndRef} />
