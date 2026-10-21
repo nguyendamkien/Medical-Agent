@@ -5,9 +5,9 @@ Bộ câu hỏi chuẩn để đo chất lượng RAG trên dữ liệu **10 b�
 | Script | Đo gì | Tốn gì |
 |---|---|---|
 | [backend/eval/eval_retrieval.py](../backend/eval/eval_retrieval.py) | Chỉ bước **retrieval**: có lấy đúng bài không, xếp hạng tốt không | Embed 75 câu hỏi (< $0.001). Có rerank (10 ứng viên) thì ~14 phút CPU |
-| [backend/eval/eval_rag.py](../backend/eval/eval_rag.py) | **Toàn bộ pipeline** (retrieve → Gemini) theo 4 tiêu chí RAGAS, dùng LLM làm giám khảo | 70 lượt gọi Gemini + giám khảo ~$0.2–0.3; ~12 phút khi bật rerank |
+| [backend/eval/eval_rag.py](../backend/eval/eval_rag.py) | **Toàn bộ pipeline** (retrieve → Gemini) theo 4 tiêu chí RAGAS, dùng LLM làm giám khảo; `--agent` chạy agent và đo thêm hành vi gọi tool | 70 lượt gọi Gemini + giám khảo ~$0.2–0.3; ~12 phút khi bật rerank (3 luồng song song) |
 
-Dữ liệu: [backend/eval/golden_set.jsonl](../backend/eval/golden_set.jsonl) — 70 câu. Mọi đáp án tham chiếu đều trích từ chính các bài trong dữ liệu, không lấy từ kiến thức ngoài.
+Dữ liệu: [backend/eval/golden_set.jsonl](../backend/eval/golden_set.jsonl) — 88 câu (70 câu gốc + 18 câu thêm ngày 20/10/2026 cho đánh giá agent, xem [AGENTIC_RAG.md](AGENTIC_RAG.md) bước 4). Mọi đáp án tham chiếu đều trích từ chính các bài trong dữ liệu, không lấy từ kiến thức ngoài. Các bảng kết quả đo trước 20/10 dùng 70 câu gốc.
 
 ## Thành phần bộ test
 
@@ -15,12 +15,14 @@ Dữ liệu: [backend/eval/golden_set.jsonl](../backend/eval/golden_set.jsonl) �
 |---|---|---|
 | `factual` | 32 | Câu hỏi kiến thức nền (định nghĩa, triệu chứng, nguyên nhân, chẩn đoán, điều trị), chủ yếu từ các bài tổng quan Vinmec |
 | `specific` | 20 | Chi tiết nằm trong 1 bài chuyên đề cụ thể (gout ăn chuối, omeprazole uống lúc nào, suy thận ăn rau ngót…) |
-| `follow_up` | 5 | Câu hỏi nối tiếp có `history` ("Vậy điều trị thế nào?"), kèm `standalone_question` để so sánh |
-| `multi_doc` | 3 | Cần ghép thông tin từ nhiều bài (tăng huyết áp → suy tim, suy thận) |
+| `follow_up` | 8 (+3) | Câu hỏi nối tiếp có `history` ("Vậy điều trị thế nào?"), kèm `standalone_question` để so sánh. Câu thêm: hội thoại 2 lượt, đổi chủ đề giữa chừng, "bài đó nói gì về…" |
+| `multi_doc` | 10 (+7) | Cần ghép thông tin từ nhiều bài hoặc nhiều khía cạnh: so sánh hai bệnh (viêm gan A / B, suy tim cấp / trái, tăng huyết áp nguyên phát / thứ phát), một bệnh hai khía cạnh (triệu chứng + phòng ngừa, triệu chứng + ăn uống) |
 | `disambiguation` | 1 | Phân biệt bệnh gần nhau (viêm gan A và viêm gan B) |
 | `out_of_kb` | 3 | Bệnh không có trong dữ liệu — phải trả lời "chưa tìm thấy thông tin" |
 | `off_topic` | 2 | Câu hỏi không liên quan y tế — phải từ chối lịch sự |
-| `safety` | 4 | Hỏi liều thuốc, tự kê đơn, dấu hiệu cấp cứu — phải từ chối kê đơn / khuyên gọi 115 |
+| `safety` | 7 (+3) | Hỏi liều thuốc, tự kê đơn, dấu hiệu cấp cứu — phải từ chối kê đơn / khuyên gọi 115. Câu thêm: hỏi liều diễn đạt vòng ("mấy viên"), cấp cứu lẫn trong câu hỏi thường (dấu hiệu đột quỵ + hỏi ăn gì), cơn hen nặng + hỏi số nhát xịt |
+| `no_search` | 3 (mới) | Lời chào, cảm ơn, hỏi bot làm được gì — `expected_behavior = greet`, agent không nên gọi tool |
+| `article` | 2 (mới) | Cần nhiều mục của cùng một bài ("tóm tắt từng mục", "trong cùng bài đó, phần phòng ngừa và điều trị") — agent nên đọc bằng `get_article` |
 
 Mỗi nhóm bệnh có 3–8 câu.
 
@@ -47,7 +49,7 @@ Mỗi nhóm bệnh có 3–8 câu.
 | `relevant_doc_ids` | Các bài chứa câu trả lời. Retrieval được tính là trúng nếu lấy về ít nhất 1 chunk thuộc các bài này. Rỗng với câu ngoài phạm vi. |
 | `expected_section` | Heading của section chứa câu trả lời (nếu xác định được) — dùng để đo retrieval có lấy đúng mục không. |
 | `history` / `standalone_question` | Chỉ có ở `follow_up`: lịch sử chat (role `user`/`model`, đúng schema API) và câu hỏi đã viết lại độc lập. |
-| `expected_behavior` | `answer`, `no_info`, `decline_off_topic`, `refuse_dosage`, `emergency` — hành vi mong đợi của câu trả lời cuối. `eval_rag.py` chỉ chấm answer_relevancy cho câu `answer`. |
+| `expected_behavior` | `answer`, `no_info`, `decline_off_topic`, `refuse_dosage`, `emergency`, `greet` — hành vi mong đợi của câu trả lời cuối. `eval_rag.py` chỉ chấm answer_relevancy cho câu `answer`. |
 | `reference_answer` | Đáp án chuẩn, viết lại ngắn gọn từ bài gốc — để người đọc đối chiếu, không đưa vào giám khảo. |
 | `key_facts` | Các ý cần có để trả lời đúng — dùng để chấm **context_recall** (context có chứa đủ các ý này không). |
 
@@ -154,9 +156,14 @@ cd backend
 python -m eval.eval_rag                               # toàn bộ 70 câu, ~12 phút khi bật rerank
 python -m eval.eval_rag --ids gout-01,follow-01       # chạy vài câu
 python -m eval.eval_rag --limit 10 --judge-model gpt-5-mini
+python -m eval.eval_rag --agent --workers 1 --resume  # agent (AgentService), tuần tự, chạy tiếp nếu bị ngắt
+python -m eval.eval_rag --types multi_doc,article     # chỉ một số loại câu
 ```
 
-Kết quả chi tiết từng câu (câu trả lời, chunk lấy về, claim không có căn cứ, nhận xét của giám khảo) ghi ra `eval/results_rag.json`.
+Kết quả chi tiết từng câu (câu trả lời, chunk lấy về, claim không có căn cứ, nhận xét của giám khảo) ghi ra `eval/results_rag.json` (`--agent`: `eval/results_agent.json`; đổi bằng `--out`). Từng câu được ghi dần vào `<out>.partial.jsonl`; `--resume` bỏ qua các câu đã có ở đó.
+
+- **`--agent`:** "context" đưa cho giám khảo là mọi chunk agent đã lấy trong request (kể cả nội dung đọc bằng `get_article`). Mỗi câu thêm vết chạy (`trace`, `fallback`) và chỉ số hành vi: số lần tìm / đọc bài, lời gọi tool lỗi, chạm giới hạn, **trả lời không tìm** (câu `answer` mà không gọi tool), **tìm khi không cần** (câu `decline_off_topic` / `greet` mà vẫn gọi tool). Ý nghĩa: [AGENTIC_RAG.md](AGENTIC_RAG.md) bước 4.
+- **Thời gian:** script in trung vị / max thời gian sinh câu trả lời theo loại câu (không tính giám khảo). Chỉ so được khi chạy `--workers 1` — chạy song song các luồng tranh CPU với reranker.
 
 ### Bộ tiêu chí
 
@@ -182,7 +189,9 @@ Giám khảo là LLM nên điểm dao động nhỏ giữa các lần chạy; so
 
 ### Kết quả
 
-**Lần đo hiện tại — 08/10/2026, cấu hình đang dùng:** như lần 30/09 (generator `gemini-3.1-flash-lite`, giám khảo `gpt-4.1-mini`, embedding `text-embedding-3-small`, hybrid + rerank 10 ứng viên, top-5), thêm **viết lại câu hỏi nối tiếp** (`QUERY_REWRITE_ENABLED=true`, `HISTORY_MAX_TURNS=10`). Chạy 70/70 câu, không lỗi. Chi tiết từng câu: `backend/eval/results_rag.json`.
+**Lần đo 20/10/2026 — 88 câu, pipeline cố định và agent, tuần tự (`--workers 1`).** Pipeline cố định: context_precision 0,98, context_recall 0,98, faithfulness 1,00, answer_relevancy 1,00, thời gian trung vị 19 s; chỉ `multi-01` bị gắn cờ (faithfulness 0,67). Agent: 0,96 / 0,96 / 1,00 / 1,00, 24 s — tốt hơn ở `multi_doc`, kém ở `safety`. Bảng theo loại câu, hành vi agent, đọc tay câu an toàn và kết luận: [AGENTIC_RAG.md](AGENTIC_RAG.md) "Kết quả bước 4". Chi tiết từng câu: `backend/eval/results_rag_88.json`, `backend/eval/results_agent_88.json`.
+
+**Lần đo 08/10/2026 (70 câu), cấu hình lúc đó:** như lần 30/09 (generator `gemini-3.1-flash-lite`, giám khảo `gpt-4.1-mini`, embedding `text-embedding-3-small`, hybrid + rerank 10 ứng viên, top-5), thêm **viết lại câu hỏi nối tiếp** (`QUERY_REWRITE_ENABLED=true`, `HISTORY_MAX_TURNS=10`). Chạy 70/70 câu, không lỗi. (File chi tiết đã xoá ngày 20/10/2026 — lần đo 88 câu thay thế; số liệu giữ trong bảng dưới.)
 
 | Nhóm | n | context_precision | context_recall | faithfulness | answer_relevancy |
 |---|---|---|---|---|---|
@@ -252,6 +261,8 @@ Giữ nguyên `id` để so sánh được giữa các lần chạy; mọi chỉ
 |---|---|---|---|
 | 27/09/2026 | `hf-02`, `ad-01`, `ckd-06` | Rút gọn `key_facts` | Đòi thêm ý câu hỏi không hỏi, làm điểm chấm theo `key_facts` thấp oan |
 | 28/09/2026 | `gout-02`, `safety-04` | Thêm 1 bài vào `relevant_doc_ids` mỗi câu | Hybrid lấy lên đúng các bài này (có mục "Dấu hiệu cảnh báo cơn gout cấp", "Dùng thuốc điều trị cao huyết áp") nhưng trước đó chưa được gán nhãn. Chỉ số của dense không đổi sau khi bổ sung |
+
+| 20/10/2026 | 18 câu mới: `multi-04`…`multi-10`, `follow-06`…`follow-08`, `safety-05`…`safety-07`, `greet-01`…`greet-03`, `article-01`, `article-02` | Thêm câu, thêm loại `no_search` (`expected_behavior = greet`) và `article` | Đánh giá agent (AGENTIC_RAG.md bước 4): bộ 70 câu có quá ít câu agent tạo khác biệt. `key_facts` viết từ đúng mục trong bài nguồn |
 
 Lần đo end-to-end 27/09 thực hiện **trước** các chỉnh sửa này; lần đo 30/09 dùng bộ nhãn đã chỉnh.
 
