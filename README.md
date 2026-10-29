@@ -317,7 +317,3 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 | Adminer báo `Connection refused`                                                   | Ô System đang là MySQL. Chọn **PostgreSQL** |
 | `relation "users" does not exist`                                                  | Chưa tạo bảng: `python -m alembic upgrade head` trong `backend/` |
 | Đang dùng bị đưa về màn đăng nhập "Phiên đăng nhập đã hết hạn"                     | Token quá `JWT_EXPIRE_DAYS` ngày, hoặc `JWT_SECRET` vừa bị đổi. Đăng nhập lại; lịch sử vẫn còn |
-
-## Bản quyền dữ liệu
-
-Nội dung crawl thuộc về Vinmec, MEDLATEC và Báo Sức khỏe & Đời sống; dự án chỉ dùng cho mục đích học tập/thử nghiệm cá nhân. Dữ liệu từ suckhoedoisong.vn yêu cầu trích dẫn nguồn khi dùng cho AI/RAG (trường `citation` đã có sẵn trong dữ liệu). Chi tiết xem [data-collection/README.md](data-collection/README.md).
