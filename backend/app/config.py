@@ -46,7 +46,13 @@ class Settings(BaseSettings):
     dose_guardrail: bool = True
     data_path: str = "../data-collection/data/benh_pho_bien_10.jsonl"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # PostgreSQL lưu user + lịch sử chat (docker-compose.yml ở thư mục gốc). Xem app/db.py.
+    database_url: str = "postgresql+pg8000://medical:medical@localhost:5432/medical_agent"
 
+    # Đăng nhập (app/security.py). JWT_SECRET bắt buộc, chỉ để trong .env.
+    jwt_secret: str = ""
+    jwt_expire_days: int = 7
+    
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @property

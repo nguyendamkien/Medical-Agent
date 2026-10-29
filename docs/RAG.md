@@ -111,6 +111,7 @@ POST /api/chat ──► cắt history ──► [viết lại câu hỏi] ─�
                                    (chỉ khi có history)     (hybrid + [rerank])
 ```
 
+0. **Lấy lịch sử** (`app/routers/chat.py`): từ 29/10/2026 client không gửi `history` nữa. Router đọc tối đa `2 × HISTORY_MAX_TURNS` tin nhắn gần nhất của hội thoại từ PostgreSQL rồi truyền vào service. Xem [AUTH_CHAT_HISTORY.md](AUTH_CHAT_HISTORY.md).
 1. **Cắt lịch sử** (`trim_history` trong `app/services/rag_service.py`): chỉ giữ `HISTORY_MAX_TURNS` lượt hỏi–đáp gần nhất (mặc định 10), bỏ tin nhắn bot đứng đầu (lời chào) để lịch sử luôn bắt đầu bằng câu của người dùng.
 2. **Viết lại câu hỏi** (`QUERY_REWRITE_ENABLED`, mặc định bật; `GeminiService.rewrite_query`): khi đã có lịch sử, Gemini (temperature 0, prompt riêng) viết câu hỏi nối tiếp thành câu độc lập — "Vậy điều trị thế nào?" → "Điều trị bệnh gout như thế nào?". Câu viết lại **chỉ dùng để retrieve**; bước sinh câu trả lời vẫn nhận câu gốc + lịch sử. Gọi Gemini lỗi, kết quả rỗng hoặc dài bất thường (> 300 ký tự) → dùng câu gốc. Câu đầu tiên của cuộc trò chuyện không tốn thêm lần gọi nào.
 3. **Retrieve** các chunk liên quan bằng hybrid search (chi tiết ở mục dưới) — `app/rag/retriever.py`.

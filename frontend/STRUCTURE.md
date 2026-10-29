@@ -1,5 +1,7 @@
 # Cấu trúc Frontend (React + Vite)
 
+Người dùng phải **đăng nhập** mới chat được. Lịch sử hội thoại lưu ở backend (PostgreSQL), không lưu trong trình duyệt. Trình duyệt chỉ giữ token đăng nhập. Phía backend xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md).
+
 ## Cây thư mục
 
 ```
@@ -9,30 +11,52 @@ frontend/
 ├── .env.example                   # Mẫu cấu hình (VITE_API_BASE_URL trỏ tới backend)
 └── src/
     ├── main.jsx                   # Điểm khởi động: render <App /> vào DOM
-    ├── App.jsx                    # Component gốc — quản lý state session + layout tổng
-    ├── App.css                    # Style cho toàn bộ layout (header/sidebar/chat/footer)
+    ├── App.jsx                    # Component gốc: trạng thái đăng nhập, hội thoại, tin nhắn, gửi câu hỏi
+    ├── App.css                    # Style cho toàn bộ layout (header/sidebar/chat/đăng nhập/footer)
     ├── index.css                  # CSS reset tối giản, áp cho toàn trang
     ├── api/
-    │   └── chatApi.js             # Gọi backend: fetch POST /api/chat/stream, đọc stream SSE
+    │   └── chatApi.js             # Mọi lời gọi backend: token, đăng nhập, hội thoại, chat stream (SSE)
     ├── components/
-    │   ├── Sidebar.jsx            # Danh sách session + nút "Cuộc trò chuyện mới"
+    │   ├── AuthScreen.jsx         # Màn đăng nhập / đăng ký
+    │   ├── Sidebar.jsx            # Danh sách hội thoại, tạo mới / đổi tên / xoá, tên user + đăng xuất
     │   ├── MessageBubble.jsx      # 1 bong bóng chat; câu trả lời của bot render markdown (react-markdown)
     │   └── ChatInput.jsx          # Ô nhập tin nhắn + nút Gửi
     └── utils/
-        └── sessions.js            # Tạo/đọc/ghi session vào localStorage
+        └── sessions.js            # Lời chào mặc định + đổi tin nhắn từ API sang dạng hiển thị
 ```
 
-## Cây component (ai render ai)
+## Cây component
 
 ```
 main.jsx
-  └── App.jsx                       (state: sessions[], activeSessionId, isLoading)
-        ├── <header>                 tiêu đề app
-        ├── <Sidebar>                 nhận sessions + activeSessionId, callback chọn/tạo/xoá
-        ├── <main class="chat-window">
-        │     └── <MessageBubble> × N  (1 cái mỗi tin nhắn trong session đang mở)
-        ├── <ChatInput>               callback onSend(text) → App.handleSend
-        └── <footer>                 disclaimer y tế cố định
+  └── App.jsx            (state: user, conversations[], activeId, messagesById{}, isSending...)
+        ├── <header>
+        ├── user === undefined → "Đang tải…" (đang hỏi /api/auth/me), hoặc lỗi kết nối + nút Thử lại
+        ├── user === null      → <AuthScreen>   đăng nhập / đăng ký → onLoggedIn(user)
+        ├── user là object     →
+        │     ├── <Sidebar>       hội thoại + user; callback chọn / tạo / đổi tên / xoá / đăng xuất
+        │     ├── <main class="chat-window">
+        │     │     └── <MessageBubble> × N   (tin nhắn của hội thoại đang mở, hoặc lời chào)
+        │     └── <ChatInput>     onSend(text) → App.handleSend
+        └── <footer>             disclaimer y tế cố định
+```
+
+## Đăng nhập
+
+```
+Mở trang
+  ├─ Không có token trong localStorage → màn đăng nhập
+  └─ Có token → GET /api/auth/me
+        ├─ 200 → vào giao diện chat, tải GET /api/conversations cho sidebar
+        ├─ 401 (token hết hạn) → xoá token, màn đăng nhập + thông báo "phiên đã hết hạn"
+        └─ không tới được backend → thông báo lỗi + nút Thử lại
+
+Đăng nhập: POST /api/auth/login → lưu access_token vào localStorage (key "chatbot-y-te-token")
+Đăng ký:   POST /api/auth/register → tự đăng nhập luôn
+Đăng xuất: xoá token + xoá dữ liệu đang hiện
+
+Bất kỳ request nào bị 401 khi đang có token → chatApi phát sự kiện "auth:logout"
+→ App xoá dữ liệu và về màn đăng nhập.
 ```
 
 ## Luồng dữ liệu khi gửi 1 tin nhắn
@@ -40,73 +64,58 @@ main.jsx
 ```
 Người dùng gõ câu hỏi, bấm Gửi
     ▼
-ChatInput.handleSubmit          — validate không rỗng, gọi onSend(text), rồi tự xoá input
-    ▼
 App.handleSend(text)
-    │  1. Thêm { role: "user", content: text } và một bong bóng trả lời rỗng
-    │     { role: "model", content: "", pending: true, status } vào session đang mở
-    │     (nếu là tin nhắn đầu tiên → tự đặt tên session theo nội dung câu hỏi)
-    │  2. setIsLoading(true) → khoá ô nhập
-    │  3. Gọi streamChatMessage(text, history, handlers)  [api/chatApi.js]
+    │  1. Thêm { role: "user" } và bong bóng trả lời rỗng { pending: true } vào messagesById[key]
+    │     key = id hội thoại đang mở, hoặc "draft" nếu là cuộc mới chưa gửi câu nào
+    │  2. Gọi streamChatMessage(text, activeId)   (activeId = null ở cuộc mới)
     ▼
-chatApi.streamChatMessage        — fetch POST {API_BASE_URL}/api/chat/stream, đọc từng sự kiện SSE:
-    │   status  → bong bóng hiện "Đang phân tích câu hỏi… / Đang tìm tài liệu… / Đang soạn…"
-    │   sources → lưu nguồn (chỉ hiện khi đã có chữ)
-    │   delta   → nối thêm chữ vào content, bong bóng render markdown + con trỏ nhấp nháy
-    │   done    → bỏ cờ pending;  error → bong bóng lỗi (hoặc giữ phần đã có + ghi chú bị ngắt)
+chatApi.streamChatMessage   POST /api/chat/stream  { message, conversation_id }  + header Authorization
+    │   conversation → { id, title }: cuộc mới thì chuyển tin nhắn "draft" sang id thật, thêm vào
+    │                  đầu sidebar. Cuộc cũ thì đẩy lên đầu sidebar
+    │   status       → bong bóng hiện "Đang tìm tài liệu… / Đang soạn…"
+    │   sources      → lưu nguồn trích dẫn
+    │   delta        → nối thêm chữ (render markdown + con trỏ nhấp nháy)
+    │   done         → bỏ cờ pending.   error → bong bóng lỗi
     ▼
-useEffect trong App.jsx         — mỗi lần messages đổi, tự saveSessions() vào localStorage
-                                    và cuộn khung chat xuống cuối
+Backend tự lưu câu hỏi + câu trả lời vào DB khi trả lời xong (lỗi giữa chừng thì không lưu),
+nên frontend không phải gửi lịch sử hay tự lưu gì.
 ```
 
 ## Giải thích từng file
 
-### `src/main.jsx`
-File khởi động chuẩn của Vite — lấy `<div id="root">` trong `index.html`, render `<App />` vào đó (bọc trong `<StrictMode>` để React cảnh báo sớm các pattern không an toàn khi dev).
-
 ### `src/App.jsx`
-Component gốc, giữ toàn bộ **state chính** của app:
-- `sessions`: mảng các cuộc trò chuyện, mỗi session có `{ id, title, createdAt, messages[] }`. Khởi tạo bằng cách đọc từ `localStorage` (`loadSessions()`), nếu chưa có gì thì tạo 1 session mới.
-- `activeSessionId`: id session đang mở trên màn hình.
-- `isLoading`: đang chờ phản hồi từ backend hay không (để disable input + hiện bong bóng "đang soạn").
+Giữ toàn bộ **state chính**:
+- `user`: `undefined` (đang kiểm tra), `null` (chưa đăng nhập) hoặc thông tin user.
+- `conversations`: danh sách cho sidebar, lấy từ `GET /api/conversations`.
+- `activeId`: hội thoại đang mở. `null` là cuộc mới chưa gửi câu nào.
+- `messagesById`: cache tin nhắn theo id hội thoại (key `"draft"` cho cuộc mới). Mở một hội thoại lần đầu thì tải từ `GET /api/conversations/{id}/messages`, các lần sau dùng cache.
+- `isSending`: đang chờ câu trả lời. Khi đó khóa ô nhập, nút tạo mới, đổi tên, xóa, đăng xuất. Vẫn cho chọn hội thoại khác để xem.
 
-Các hàm xử lý chính:
-- `handleSend(text)`: xem sơ đồ luồng dữ liệu ở trên.
-- `handleNewSession()` / `handleDeleteSession(id)`: thêm/xoá session, tự chuyển `activeSessionId` sang session hợp lý khi xoá session đang mở.
-
-Có 2 `useEffect`:
-- Tự động `saveSessions()` vào `localStorage` mỗi khi `sessions` hoặc `activeSessionId` đổi — nhờ vậy F5 lại trang không mất lịch sử chat.
-- Tự cuộn khung chat xuống tin nhắn mới nhất mỗi khi có tin nhắn mới hoặc đổi trạng thái loading.
-
-### `src/components/Sidebar.jsx`
-Component "dumb" (không giữ state riêng) — nhận toàn bộ dữ liệu + callback từ `App.jsx` qua props:
-`sessions`, `activeSessionId`, `onSelectSession`, `onNewSession`, `onDeleteSession`. Render nút tạo session mới và danh sách session (nút xoá chỉ hiện khi còn hơn 1 session, để luôn giữ ít nhất 1 cuộc trò chuyện).
-
-### `src/components/MessageBubble.jsx`
-Component thuần hiển thị — nhận `role` ("user" | "model"), `content`, `isError`; tự chọn class CSS để bong bóng lệch phải (user, màu xanh) hay lệch trái (bot, màu trắng), đổi màu đỏ nếu `isError`.
-
-### `src/components/ChatInput.jsx`
-Giữ state cục bộ `value` cho ô input. Khi submit form: trim() nội dung, nếu rỗng hoặc đang `disabled` (đang loading) thì bỏ qua; ngược lại gọi `onSend(trimmed)` rồi tự xoá ô input.
+Các hàm chính: `handleSend`, `handleSelect`, `handleNew`, `handleRename` (dùng `window.prompt`), `handleDelete` (hỏi xác nhận), `handleLoggedIn`, `handleLogout`.
 
 ### `src/api/chatApi.js`
-Hàm `streamChatMessage(message, history, { onStatus, onSources, onDelta })` — nơi **duy nhất** trong frontend gọi ra backend. Đọc `API_BASE_URL` từ biến môi trường `VITE_API_BASE_URL` (fallback `http://localhost:8000` nếu không set).
-- Dùng `fetch` + `ReadableStream` thay vì `EventSource` vì `EventSource` chỉ gửi được GET.
-- Tách stream theo dòng trống (`\n\n`), mỗi khối là một sự kiện `event:` / `data:` (JSON) rồi gọi handler tương ứng. Promise resolve ở sự kiện `done`, reject khi gặp sự kiện `error` hoặc stream đóng giữa chừng.
-- Nếu response không `ok` (lỗi trước khi stream, vd 500 thiếu API key), cố đọc field `detail` trong JSON lỗi để hiện thông báo dễ hiểu hơn.
+Nơi **duy nhất** gọi ra backend. Đọc `API_BASE_URL` từ `VITE_API_BASE_URL` (mặc định `http://localhost:8000`).
+- `apiFetch()`: tự gắn `Authorization: Bearer <token>`. Lỗi HTTP thì ném `Error` với `detail` của backend; lỗi 422 được dịch sang tiếng Việt. Gặp 401 khi có token thì xóa token và phát `auth:logout`. Không tới được máy chủ thì báo "Không kết nối được máy chủ".
+- Auth: `register`, `login` (lưu token), `fetchMe`, `getToken`, `clearToken`.
+- Hội thoại: `listConversations`, `listMessages`, `renameConversation`, `deleteConversation`.
+- `streamChatMessage(message, conversationId, handlers)`: dùng `fetch` + `ReadableStream` thay cho `EventSource`, vì `EventSource` chỉ gửi được GET và không gắn được header token.
+
+### `src/components/AuthScreen.jsx`
+Form đăng nhập và đăng ký (chuyển qua lại bằng nút dưới form). Hiện lỗi từ backend (sai mật khẩu, email đã đăng ký…) và thông báo "phiên đã hết hạn" nếu có.
+
+### `src/components/Sidebar.jsx`
+Component chỉ nhận props và gọi callback. Hiện danh sách hội thoại; nút ✎ (đổi tên) và × (xóa) chỉ hiện khi rê chuột vào hoặc ở mục đang mở. Cuối sidebar hiện tên, email và nút Đăng xuất.
+
+### `src/components/MessageBubble.jsx`, `ChatInput.jsx`
+Không đổi: bong bóng chat (markdown, nguồn trích dẫn, trạng thái chờ) và ô nhập.
 
 ### `src/utils/sessions.js`
-Tách riêng logic liên quan tới `localStorage` khỏi `App.jsx`:
-- `WELCOME_MESSAGE`: tin nhắn chào mặc định khi tạo session mới.
-- `createSession()`: tạo object session mới với `id` random (`crypto.randomUUID()`).
-- `loadSessions()` / `saveSessions()`: đọc/ghi vào `localStorage` dưới key `chatbot-y-te-sessions`, có `try/catch` để không crash app nếu trình duyệt chặn localStorage (vd. chế độ ẩn danh). Khi đọc, bong bóng còn `pending` (trang bị tải lại giữa lúc stream) được đóng lại thay vì hiện trạng thái chờ mãi.
-- `deriveTitle(text)`: cắt câu hỏi đầu tiên còn tối đa 32 ký tự để làm tên session hiển thị trên Sidebar.
-
-### `App.css` / `index.css`
-- `index.css`: reset tối giản áp dụng toàn trang (font, bỏ margin mặc định của `body`, cho `#root` cao 100vh).
-- `App.css`: toàn bộ style cho layout — dùng CSS Grid 3 hàng (header/body/footer) ở `.app`, trong đó `.app-body` lại là grid 2 cột (sidebar 260px + khu chat chiếm phần còn lại). Màu chủ đạo là teal `#0f9d8c` (nút, bong bóng chat của user, mục sidebar đang chọn) phối với nền trắng/xám nhạt.
+- `WELCOME_MESSAGE`: lời chào hiện ở hội thoại chưa có tin nhắn. Chỉ hiển thị, không lưu vào DB.
+- `fromApiMessage()`: đổi tin nhắn từ API sang dạng `MessageBubble` dùng (`sources` null thành `[]`).
+- `clearLegacySessions()`: xóa lịch sử chat cũ còn trong `localStorage` (key `chatbot-y-te-sessions`, thời chưa có đăng nhập). `App.jsx` gọi hàm này mỗi khi mở trang. Dữ liệu cũ này không được chuyển lên DB.
 
 ## Vì sao tách như vậy?
 
-- **State tập trung ở `App.jsx`**, các component con (`Sidebar`, `MessageBubble`, `ChatInput`) đều là "dumb component" chỉ nhận props và gọi callback — dễ test, dễ đọc, không có state rải rác nhiều nơi gây khó đồng bộ (vd. sessions phải nhất quán giữa Sidebar và khung chat).
-- **`api/` tách riêng khỏi component**: nếu sau này đổi cách gọi backend (thêm header auth, đổi sang GraphQL...), chỉ sửa `chatApi.js`, không đụng vào UI.
-- **`utils/sessions.js` tách khỏi `App.jsx`**: logic đọc/ghi `localStorage` là chi tiết triển khai, không liên quan tới việc render UI — tách ra giúp `App.jsx` tập trung vào logic "chat" thay vì logic "lưu trữ".
+- **State tập trung ở `App.jsx`**: các component con chỉ nhận props và gọi callback, nên sidebar và khung chat luôn khớp nhau.
+- **`api/` tách riêng**: cách gọi backend (token, xử lý 401, định dạng lỗi) nằm gọn trong `chatApi.js`, không lẫn vào UI.
+- **Backend là nơi lưu dữ liệu**: frontend không tự lưu lịch sử, nên đăng nhập ở trình duyệt hay máy khác vẫn thấy đúng lịch sử.

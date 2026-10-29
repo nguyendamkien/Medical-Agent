@@ -100,18 +100,128 @@
   white-space: nowrap;
 }
 
-.sidebar__item-delete {
+.sidebar__new-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Nút đổi tên / xoá: chỉ hiện khi rê chuột vào mục (hoặc mục đang mở). */
+.sidebar__item-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.1rem;
+  visibility: hidden;
+}
+
+.sidebar__item:hover .sidebar__item-actions,
+.sidebar__item--active .sidebar__item-actions,
+.sidebar__item-actions:focus-within {
+  visibility: visible;
+}
+
+.sidebar__item-btn {
   border: none;
   background: transparent;
   color: #93a3a0;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   line-height: 1;
   cursor: pointer;
-  padding: 0 0.2rem;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
 }
 
-.sidebar__item-delete:hover {
+.sidebar__item-btn:hover:not(:disabled) {
+  color: #0a7a6d;
+  background: #d3ebe6;
+}
+
+.sidebar__item-btn--delete {
+  font-size: 1.1rem;
+}
+
+.sidebar__item-btn--delete:hover:not(:disabled) {
   color: #c0392b;
+  background: #f8dcd8;
+}
+
+.sidebar__item-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sidebar__hint {
+  margin: 0.25rem 0.2rem;
+  font-size: 0.82rem;
+  color: #6b7876;
+}
+
+.sidebar__hint--error {
+  color: #a12622;
+}
+
+.sidebar__link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #087f70;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Thông tin user + đăng xuất ở cuối sidebar. */
+.sidebar__user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #dfe7e5;
+}
+
+.sidebar__user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar__user-name,
+.sidebar__user-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__user-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1f2d2b;
+}
+
+.sidebar__user-email {
+  font-size: 0.75rem;
+  color: #6b7876;
+}
+
+.sidebar__logout-btn {
+  flex-shrink: 0;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #d0d7d5;
+  border-radius: 6px;
+  background: #fff;
+  color: #33433f;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.sidebar__logout-btn:hover:not(:disabled) {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+.sidebar__logout-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ---------- Main chat area ---------- */
@@ -129,6 +239,17 @@
   flex-direction: column;
   gap: 0.6rem;
   background: #f9fbfa;
+}
+
+.chat-window__hint {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #6b7876;
+  text-align: center;
+}
+
+.chat-window__hint--error {
+  color: #a12622;
 }
 
 .message-row {
@@ -333,6 +454,122 @@
 .chat-input button:disabled {
   background: #a9c9c4;
   cursor: not-allowed;
+}
+
+/* ---------- Đăng nhập / đăng ký (AuthScreen.jsx) ---------- */
+.auth,
+.app-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+  overflow-y: auto;
+  background: #f9fbfa;
+}
+
+.app-loading {
+  color: #6b7876;
+}
+
+.auth__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  width: 100%;
+  max-width: 380px;
+  padding: 1.75rem 1.5rem;
+  border: 1px solid #e0e6e4;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(15, 80, 70, 0.08);
+}
+
+.auth__title {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #0a7a6d;
+}
+
+.auth__subtitle {
+  margin: -0.4rem 0 0.2rem;
+  font-size: 0.85rem;
+  color: #6b7876;
+}
+
+.auth__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #33433f;
+}
+
+.auth__field input {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #d0d7d5;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 400;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.auth__field input:focus {
+  border-color: #0f9d8c;
+  box-shadow: 0 0 0 3px rgba(15, 157, 140, 0.15);
+}
+
+.auth__notice,
+.auth__error {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.auth__notice {
+  background: #fff6e0;
+  border: 1px solid #f1d9a0;
+  color: #7a5a12;
+}
+
+.auth__error {
+  background: #fdecea;
+  border: 1px solid #f5c2bd;
+  color: #a12622;
+}
+
+.auth__submit {
+  padding: 0.7rem 1rem;
+  border: none;
+  border-radius: 8px;
+  background: #0f9d8c;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.auth__submit:hover:not(:disabled) {
+  background: #0a7a6d;
+}
+
+.auth__submit:disabled {
+  background: #a9c9c4;
+  cursor: not-allowed;
+}
+
+.auth__switch {
+  border: none;
+  background: none;
+  color: #087f70;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.auth__switch:hover:not(:disabled) {
+  text-decoration: underline;
 }
 
 /* ---------- Footer ---------- */

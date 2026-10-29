@@ -18,6 +18,18 @@ openai>=1.40
 # --- Vector database cho RAG ---
 chromadb==1.1.1
 
+sqlalchemy==2.0.*
+pg8000>=1.31,<2           # driver PostgreSQL thuần Python (psycopg_binary bị Windows chặn DLL)
+
+# --- Migration (tạo / sửa bảng theo phiên bản) ---
+alembic>=1.13,<2
+
+# --- Đăng nhập ---
+pwdlib[argon2]>=0.2,<1      # băm mật khẩu bằng argon2
+pyjwt>=2.8,<3               # tạo / kiểm tra access token
+email-validator>=2,<3       # để Pydantic kiểm tra định dạng email (EmailStr)
+
+
 # --- Rerank bằng cross-encoder (RERANK_ENABLED=true) ---
 # Chạy bằng ONNX Runtime: cần onnxruntime, tokenizers, huggingface_hub, numpy — đều đã
 # được chromadb kéo theo, không cần cài thêm.

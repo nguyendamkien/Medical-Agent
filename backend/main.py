@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import chat
+from app.routers import auth, chat, conversations   # conversations tạo ở bước 8
 
 settings = get_settings()
 
@@ -20,8 +20,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
+app.include_router(conversations.router)
 app.include_router(chat.router)
-
 
 @app.get("/")
 def health_check() -> dict[str, str]:

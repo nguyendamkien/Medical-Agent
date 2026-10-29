@@ -1,6 +1,6 @@
 # Cấu trúc Backend (FastAPI + RAG)
 
-Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
+Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
 
 ## Cây thư mục
 
@@ -9,11 +9,20 @@ backend/
 ├── main.py                        # Điểm khởi động app: tạo FastAPI instance, gắn CORS, gắn router
 ├── requirements.txt               # Danh sách thư viện Python cần cài
 ├── .env.example                   # Mẫu file cấu hình (copy thành .env rồi điền key thật)
+├── alembic.ini                    # Cấu hình Alembic (URL DB lấy từ .env qua alembic/env.py)
+├── alembic/
+│   ├── env.py                     # Nạp DATABASE_URL + models để Alembic so sánh với DB
+│   └── versions/                  # File migration, mỗi file một lần đổi cấu trúc bảng (phải commit)
 ├── app/
 │   ├── config.py                  # Đọc cấu hình từ .env (Settings)
 │   ├── schemas.py                 # Định nghĩa request/response body (Pydantic models)
+│   ├── db.py                      # Kết nối PostgreSQL: engine, SessionLocal, Base, get_db
+│   ├── models.py                  # Bảng users, conversations, messages (SQLAlchemy)
+│   ├── security.py                # Băm mật khẩu argon2, tạo / kiểm tra JWT, get_current_user
 │   ├── routers/
-│   │   └── chat.py                # POST /api/chat (trả một lần) và POST /api/chat/stream (SSE)
+│   │   ├── auth.py                # POST /api/auth/register, /login, GET /api/auth/me
+│   │   ├── conversations.py       # GET/PATCH/DELETE /api/conversations… (sidebar)
+│   │   └── chat.py                # POST /api/chat (trả một lần) và POST /api/chat/stream (SSE), lưu lịch sử
 │   ├── services/
 │   │   ├── rag_service.py         # Điều phối một câu hỏi: retrieve → prompt → Gemini → nguồn
 │   │   ├── agent_service.py       # Agent (AGENT_ENABLED=true): Gemini tự gọi tool tìm tài liệu
@@ -38,7 +47,7 @@ backend/
     └── eval_rag.py                # Chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo
 ```
 
-## Hai luồng chính
+## Các luồng chính
 
 ### 1. Ingest — chạy 1 lần: `python -m app.scripts.ingest`
 
@@ -59,11 +68,17 @@ rag/vector_store.py    — reset collection, upsert (id, text, embedding, metada
 
 ```
 Frontend (React)
-    │  POST /api/chat  { message, history }
+    │  POST /api/chat  { message, conversation_id }   + header Authorization: Bearer <token>
     ▼
 main.py                    — app FastAPI nhận request, CORS middleware kiểm tra origin
     ▼
-routers/chat.py            — validate body theo ChatRequest, gọi RagService.ask
+security.get_current_user  — kiểm tra JWT, lấy User từ DB (sai / hết hạn → 401)
+    ▼
+routers/chat.py            — validate body theo ChatRequest
+    │  _prepare_conversation: chưa có conversation_id → tạo hội thoại mới;
+    │                         có → get_owned_conversation (không phải của user → 404)
+    │                         + đọc HISTORY_MAX_TURNS lượt gần nhất từ bảng messages
+    │  gọi service.ask(message, history)   (AgentService hoặc RagService)
     ▼
 services/rag_service.py
     │
@@ -78,10 +93,34 @@ services/rag_service.py
     └─► services/gemini_service.py
             — gửi prompt + history + SYSTEM_INSTRUCTION tới Gemini, nhận câu trả lời
     ▼
-routers/chat.py            — bọc vào ChatResponse { reply, sources, disclaimer }
+routers/chat.py            — _save_turn: lưu câu hỏi + câu trả lời (kèm sources) vào bảng messages,
+                             cập nhật conversations.updated_at; bọc vào ChatResponse { reply, sources, disclaimer }
     ▼
 Frontend hiển thị câu trả lời + danh sách nguồn
 ```
+
+`/api/chat/stream` đi cùng đường, nhưng phát sự kiện `conversation` (id, tiêu đề) trước tiên. Chỉ lưu khi stream chạy hết mà không lỗi.
+
+### 3. Đăng nhập
+
+```
+POST /api/auth/register  { email, password, display_name }
+    → routers/auth.py: email đã có → 409; hash_password (argon2) → INSERT users
+POST /api/auth/login     { email, password }
+    → routers/auth.py: tìm user theo email, verify_password → create_access_token (JWT: sub = user id, exp)
+Các request sau: header Authorization: Bearer <token>
+    → security.get_current_user: jwt.decode (chữ ký + hạn) → db.get(User) → trả User cho router
+```
+
+### 4. Đổi cấu trúc bảng (migration)
+
+```
+sửa app/models.py
+    → python -m alembic revision --autogenerate -m "mô tả"   (sinh file trong alembic/versions/)
+    → đọc lại file vừa sinh
+    → python -m alembic upgrade head                          (chạy vào DB)
+```
+Không sửa file migration đã chạy. DB ghi phiên bản hiện tại trong bảng `alembic_version`.
 
 Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `AgentService` thay cho `RagService`: Gemini tự quyết định gọi `search_medical_docs` / `get_article` (0 đến `AGENT_MAX_TOOL_CALLS` lần) rồi mới trả lời; không còn bước viết lại câu hỏi. Chi tiết: [../docs/AGENTIC_RAG.md](../docs/AGENTIC_RAG.md).
 
@@ -90,32 +129,66 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 ### `main.py`
 - Tạo instance `FastAPI()` — app chính, được `uvicorn` chạy (`python -m uvicorn main:app`).
 - Gắn `CORSMiddleware` để frontend (origin khác, vd `localhost:5173`) gọi được API — danh sách origin đọc từ `Settings.cors_origins_list`.
-- `app.include_router(chat.router)` gắn các endpoint trong `app/routers/chat.py`.
+- `app.include_router(...)` gắn các endpoint trong `app/routers/auth.py`, `conversations.py`, `chat.py`. Các dòng này phải đứng **sau** `app = FastAPI(...)`.
 - `GET /` là health-check, trả về `{"status": "ok", ...}`.
 
 ### `app/config.py`
 - Class `Settings` kế thừa `pydantic_settings.BaseSettings` — đọc biến môi trường **hoặc** file `.env`, không phân biệt hoa thường tên biến.
 - Biến `.env` không khai báo trong `Settings` sẽ gây lỗi `Extra inputs are not permitted` khi khởi động.
-- Các nhóm cấu hình: API key và model (Gemini, OpenAI embedding), Chroma, dữ liệu, retrieval (`RAG_TOP_K`, `RAG_MIN_SCORE`, `RETRIEVAL_MODE`, `RAG_CANDIDATES`, `RRF_K`), rerank (`RERANK_*`), CORS. Bảng đầy đủ: [../docs/RAG.md](../docs/RAG.md).
+- Các nhóm cấu hình: API key và model (Gemini, OpenAI embedding), Chroma, dữ liệu, retrieval (`RAG_TOP_K`, `RAG_MIN_SCORE`, `RETRIEVAL_MODE`, `RAG_CANDIDATES`, `RRF_K`), rerank (`RERANK_*`), CORS, PostgreSQL (`DATABASE_URL`), đăng nhập (`JWT_SECRET`, `JWT_EXPIRE_DAYS`). Bảng đầy đủ: [../docs/RAG.md](../docs/RAG.md) và [../README.md](../README.md).
 - `get_settings()` được bọc `@lru_cache` — chỉ đọc `.env` **một lần** cho cả vòng đời app. Đổi `.env` thì phải khởi động lại server.
 
 ### `app/schemas.py`
 "Hợp đồng dữ liệu" giữa frontend và backend — FastAPI tự validate theo đây và sinh docs tại `/docs`.
 
 - `ChatMessage`: 1 tin nhắn trong lịch sử — `role` chỉ nhận `"user"` hoặc `"model"` (convention của Gemini SDK), `content` là nội dung.
-- `ChatRequest`: body của `POST /api/chat` — `message` (câu hỏi mới, không rỗng) và `history` (list `ChatMessage`, mặc định rỗng).
+- `ChatRequest`: body của `POST /api/chat`, gồm `message` (câu hỏi mới, 1–4000 ký tự) và `conversation_id` (UUID, để trống ở câu đầu tiên của cuộc mới). Không còn `history`: router đọc lịch sử từ DB rồi truyền `list[ChatMessage]` cho service như trước.
 - `Source`: một nguồn tham khảo — `title`, `url`, `citation` (trích dẫn bắt buộc với bài của Sức khỏe & Đời sống).
 - `ChatResponse`: `reply`, `sources` và `disclaimer` (câu cảnh báo y tế cố định).
+- Đăng nhập: `RegisterRequest` (email dùng `EmailStr`, cần thư viện `email-validator`; mật khẩu 8–128 ký tự), `LoginRequest`, `UserOut` (không bao giờ chứa `password_hash`), `TokenResponse`.
+- Hội thoại: `ConversationOut`, `ConversationUpdate`, `MessageOut`. Các schema `*Out` có `from_attributes=True` để router trả thẳng object SQLAlchemy.
+
+### `app/db.py`
+- `engine`: pool kết nối tới `DATABASE_URL`, có `pool_pre_ping` để tự nối lại khi Postgres vừa khởi động lại. Driver là `pg8000` (thuần Python), vì Smart App Control của Windows chặn DLL của `psycopg_binary`.
+- `SessionLocal`: tạo `Session` (`expire_on_commit=False`). `get_db()` là dependency của FastAPI: mỗi request một session, tự đóng khi xong.
+- `Base`: lớp cha của các model. `check_connection()` chạy `SELECT 1` để kiểm tra kết nối.
+- Engine chỉ thật sự kết nối khi có code dùng DB.
+
+### `app/models.py`
+- `User` (`users`): `id` UUID, `email` (unique), `password_hash`, `display_name`, `created_at`.
+- `Conversation` (`conversations`): `id` UUID, `user_id` → users (`ON DELETE CASCADE`), `title`, `created_at`, `updated_at`. Có index `(user_id, updated_at)` để tải sidebar.
+- `Message` (`messages`): `id` BIGSERIAL (sắp theo id = đúng thứ tự gửi), `conversation_id` → conversations (`ON DELETE CASCADE`), `role` (`user` / `model`), `content` TEXT, `sources` JSONB (chỉ ở tin của bot), `created_at`. Có index `(conversation_id, id)`.
+- Sửa file này thì phải tạo migration mới (xem luồng 4 ở trên).
+
+### `app/security.py`
+- `hash_password` / `verify_password`: argon2 qua `pwdlib`.
+- `create_access_token(user_id)`: JWT HS256 ký bằng `JWT_SECRET`, gồm `sub` (id user) và `exp` (sau `JWT_EXPIRE_DAYS` ngày). Thiếu `JWT_SECRET` thì báo `RuntimeError`.
+- `get_current_user`: dependency đọc header `Authorization: Bearer` (`HTTPBearer`, tạo nút Authorize trên `/docs`), giải mã token và lấy `User` từ DB. Mọi lỗi (thiếu, sai chữ ký, hết hạn, user đã bị xóa) đều trả **401**.
+
+### `app/routers/auth.py`
+- `POST /api/auth/register`: email được đưa về chữ thường. Email trùng thì **409**, kể cả khi hai request đăng ký cùng lúc (bắt `IntegrityError`).
+- `POST /api/auth/login`: sai email hay sai mật khẩu đều trả cùng một thông báo **401**, để không lộ email nào đã đăng ký.
+- `GET /api/auth/me`: trả user của token.
+
+### `app/routers/conversations.py`
+- `get_owned_conversation(db, id, user)`: chốt chặn quyền truy cập, dùng chung cả ở `chat.py`. Hội thoại không tồn tại hoặc của người khác đều trả **404**.
+- `GET /api/conversations` (mới nhất trước), `GET /{id}/messages` (theo `Message.id`), `PATCH /{id}` (đổi tên), `DELETE /{id}` (204, tin nhắn bị xóa theo).
+- Không có API tạo hội thoại: `chat.py` tạo khi có câu hỏi đầu tiên.
 
 ### `app/routers/chat.py`
 - `APIRouter(prefix="/api")` — mọi route trong file có tiền tố `/api`.
+- Cả hai endpoint đều cần `get_current_user`.
 - `_get_service()`: `AGENT_ENABLED=true` (mặc định) → `get_agent_service()`, `false` → `get_rag_service()`. Hai service có cùng `ask` / `ask_stream`.
-- `POST /api/chat`: gọi `service.ask(message, history)`, bọc kết quả vào `ChatResponse`. Frontend không dùng nữa; giữ cho script đánh giá và gọi API trực tiếp.
-- `POST /api/chat/stream` (frontend dùng): cùng body, trả `text/event-stream` từ `RagService.ask_stream`. Thứ tự sự kiện:
+- `_prepare_conversation()`: tạo hội thoại mới (tiêu đề = 32 ký tự đầu của câu hỏi, `_derive_title`), hoặc kiểm tra quyền rồi đọc `2 × HISTORY_MAX_TURNS` tin nhắn gần nhất làm `history`. Chạy **trước** khi mở stream, nên lỗi 401/404 vẫn trả bằng HTTP status.
+- `_save_turn()`: lưu câu hỏi và câu trả lời trong **một** transaction, chỉ khi đã trả lời xong. Nhờ vậy lịch sử không bao giờ có câu hỏi thiếu câu trả lời. Hàm này dùng `SessionLocal()` riêng, vì với `StreamingResponse`, FastAPI 0.115 đóng session của `Depends(get_db)` trước khi stream chạy xong.
+- `POST /api/chat`: gọi `service.ask(message, history)`, lưu lượt chat, rồi bọc kết quả vào `ChatResponse`. Frontend không dùng endpoint này; giữ lại để gọi API trực tiếp.
+- `POST /api/chat/stream` (frontend dùng): cùng body, trả `text/event-stream` từ `service.ask_stream`. Thứ tự sự kiện:
+  - `conversation` `{id, title}`: luôn đến đầu tiên, để frontend biết id của hội thoại vừa tạo
   - `status` `{stage}` — `rewriting` (chỉ khi có history) → `retrieving` → `generating`. Với agent: `thinking` → mỗi lần gọi tool một `retrieving` `{stage, query}` hoặc `reading` `{stage, document_id}` → `generating`
   - `sources` `{sources}` — ngay sau khi retrieve xong; với agent, phát lại sau mỗi vòng gọi tool, mỗi lần là danh sách đầy đủ tới lúc đó
   - `delta` `{text}` — từng đoạn câu trả lời từ Gemini (`GeminiService.ask_stream`, `stream=True`)
-  - `done` `{disclaimer}` — kết thúc; hoặc `error` `{detail}` nếu lỗi giữa chừng (HTTP status lúc đó đã là 200, không đổi được nữa)
+  - `done` `{disclaimer}`: kết thúc, lượt chat đã được lưu. Hoặc `error` `{detail}` nếu lỗi giữa chừng (HTTP status lúc đó đã là 200, không đổi được nữa); khi đó lượt chat không được lưu
+  - Router gom các `delta` (đã qua guardrail liều thuốc) và `sources` cuối cùng để lưu vào DB
 - Header `X-Accel-Buffering: no` để nginx (nếu deploy sau proxy) không gom sự kiện lại.
 - Map lỗi sang HTTP status:
   - `RuntimeError` (vd thiếu API key) → **500** — lỗi cấu hình phía server.
@@ -202,5 +275,6 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 ## Vì sao tách theo layer như vậy?
 
 - `schemas.py` là nơi duy nhất định nghĩa "hình dạng dữ liệu" — router và service cùng import, tránh lệch nhau.
-- `routers/` chỉ lo HTTP (nhận request, validate, trả response, map lỗi → status code); logic nghiệp vụ nằm trong `services/`.
+- `routers/` chỉ lo HTTP (nhận request, validate, trả response, map lỗi → status code) và đọc / ghi lịch sử chat; logic nghiệp vụ RAG nằm trong `services/`. Service không biết gì về DB hay user, nên bộ eval gọi thẳng service mà không cần đăng nhập.
+- `security.py` tách khỏi router: API nào cần đăng nhập chỉ việc thêm `Depends(get_current_user)`.
 - `services/rag_service.py` chỉ điều phối; từng bước RAG nằm trong `rag/` và thay được độc lập — vd đổi model embedding chỉ sửa `embeddings.py`, đổi cách tìm kiếm chỉ sửa `retriever.py`, đổi LLM chỉ sửa `gemini_service.py`.
