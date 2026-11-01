@@ -787,3 +787,122 @@
 .modal__btn--danger:hover:not(:disabled) {
   border-color: #c0392b;
 }
+
+/* ---------- Gợi ý nơi khám (FacilityCards.jsx) ---------- */
+.facilities {
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #e3ebe9;
+}
+
+.facilities__title {
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 0.85rem;
+  color: #1f2d2b;
+}
+
+.facilities__list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.facility {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #dfe7e5;
+  border-radius: 10px;
+  background: #fbfdfc;
+  font-size: 0.85rem;
+  color: #33433f;
+}
+
+.facility__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.facility__name {
+  font-weight: 600;
+  color: #1f2d2b;
+}
+
+.facility__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.facility__badge {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: #e8f3f1;
+  color: #0a7a6d;
+  font-size: 0.72rem;
+}
+
+.facility__badge--emergency {
+  background: #fdecea;
+  color: #a12622;
+}
+
+.facility__meta,
+.facility__address {
+  margin-top: 0.2rem;
+}
+
+.facility__meta {
+  font-size: 0.78rem;
+  color: #6b7876;
+}
+
+.facility__phones {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.facility__phones a,
+.facilities__note a {
+  color: #087f70;
+  font-weight: 600;
+}
+
+.facility__warning {
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: #fff6e0;
+  color: #7a5a12;
+  font-size: 0.78rem;
+}
+
+.facility__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+}
+
+.facility__actions a {
+  padding: 0.25rem 0.65rem;
+  border: 1px solid #0f9d8c;
+  border-radius: 6px;
+  color: #0f9d8c;
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.facility__actions a:hover {
+  background: #0f9d8c;
+  color: #fff;
+}
+
+.facilities__note {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: #6b7876;
+}

@@ -30,7 +30,7 @@ from app.rag.guardrail import StreamRedactor
 from app.rag.profile import UserProfile, profile_instruction
 from app.rag.prompt import build_prompt
 from app.rag.retriever import Retriever
-from app.rag.tools import ToolSession, tool_declarations
+from app.rag.tools import FACILITY_TOOL, ToolSession, tool_declarations
 from app.schemas import ChatMessage, Source
 from app.services.gemini_service import GeminiService, to_contents
 from app.services.rag_service import collect_sources, trim_history
@@ -38,6 +38,10 @@ from app.services.rag_service import collect_sources, trim_history
 logger = logging.getLogger(__name__)
 
 TOOL_BUDGET_EXHAUSTED = "Đã hết lượt gọi tool cho câu hỏi này. Hãy trả lời bằng các tài liệu đã có."
+FACILITY_FALLBACK_TEXT = (
+    "Dưới đây là một số cơ sở y tế ở Hà Nội phù hợp. Bạn nên gọi trước để xác nhận lịch khám. "
+    "Nếu có dấu hiệu cấp cứu, hãy gọi ngay 115."
+)
 SEARCH_BUDGET_EXHAUSTED = (
     "Đã hết lượt tìm kiếm cho câu hỏi này. Vẫn có thể dùng get_article với document_id đã có; "
     "nếu không cần thì trả lời bằng các tài liệu đã có."
@@ -89,6 +93,7 @@ class AgentService:
             "trace": session.trace,
             "fallback": info.get("fallback"),
             "dose_redactions": info.get("dose_redactions", []),
+            "facilities": session.facilities,
         }
 
     def ask_stream(
@@ -99,7 +104,9 @@ class AgentService:
             ("status",  {"stage": "thinking"})                       — trước lần gọi Gemini đầu
             ("status",  {"stage": "retrieving", "query": "..."})     — mỗi lần search_medical_docs
             ("status",  {"stage": "reading", "document_id": "..."})  — mỗi lần get_article
+            ("status",  {"stage": "finding_facility"})               — mỗi lần find_healthcare_facility
             ("sources", {"sources": [...]})   — sau mỗi vòng gọi tool, danh sách đầy đủ tới lúc đó
+            ("facilities", {"facilities": [...]})  — sau vòng có gợi ý nơi khám, danh sách đầy đủ
             ("status",  {"stage": "generating"})
             ("delta",   {"text": "..."})
         """
@@ -166,7 +173,7 @@ class AgentService:
                 if part.function_call.name:
                     calls.append(part.function_call)
                 elif part.text:
-                    if not answered and not session.results and settings.agent_no_context_guard:
+                    if not answered and not session.has_content and settings.agent_no_context_guard:
                         guarded = True
                         break
                     if not answered:
@@ -187,7 +194,9 @@ class AgentService:
             responses = []
             for call in calls:
                 args = dict(call.args)
-                is_search = call.name != "get_article"
+                # Chỉ search_medical_docs tính vào AGENT_MAX_TOOL_CALLS (đắt vì rerank); get_article và
+                # find_healthcare_facility gần như tức thì, chỉ tính vào AGENT_MAX_TOTAL_CALLS.
+                is_search = call.name == "search_medical_docs"
                 if calls_made >= settings.agent_max_total_calls:
                     output = TOOL_BUDGET_EXHAUSTED
                 elif is_search and searches >= settings.agent_max_tool_calls:
@@ -197,6 +206,8 @@ class AgentService:
                     if is_search:
                         yield "status", {"stage": "retrieving", "query": args.get("query", "")}
                         searches += 1
+                    elif call.name == FACILITY_TOOL:
+                        yield "status", {"stage": "finding_facility"}
                     else:
                         yield "status", {"stage": "reading", "document_id": args.get("document_id", "")}
                     output = session.run(call.name, args)
@@ -204,12 +215,19 @@ class AgentService:
                 responses.append({"function_response": {"name": call.name, "response": {"result": output}}})
             contents.append({"role": "user", "parts": responses})
             yield "sources", {"sources": [source.model_dump() for source in collect_sources(session.results)]}
+            if session.facilities:
+                yield "facilities", {"facilities": session.facilities}
 
         if not answered:
             # Chốt chặn (chưa có chunk nào) hoặc model không sinh text: trả lời như pipeline cũ, bằng
             # prompt ghép sẵn — có chunk thì build_rag_prompt, không có thì build_no_context_prompt.
             info.setdefault("fallback", "empty_answer")
             yield "status", {"stage": "generating"}
+            if session.facilities and not session.results:
+                # Chỉ có danh sách nơi khám: prompt "không có tài liệu" sẽ nói "chưa có thông tin",
+                # lệch với các thẻ đang hiện. Dùng câu dẫn cố định.
+                yield "delta", {"text": FACILITY_FALLBACK_TEXT}
+                return
             for text in self._gemini.ask_stream(build_prompt(message, session.results, profile), history):
                 yield "delta", {"text": text}
 

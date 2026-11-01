@@ -241,7 +241,7 @@ Hybrid cứu được các câu dense bỏ lỡ vì thuật ngữ hiếm (`gout-
 
 ## Đánh giá
 
-Xem [RAG_EVAL.md](RAG_EVAL.md): bộ golden test 70 câu, script đo retrieval (`eval/eval_retrieval.py`, so được dense / hybrid / rerank) và script chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo (`eval/eval_rag.py`).
+Xem [RAG_EVAL.md](RAG_EVAL.md): bộ golden test 108 câu, script đo retrieval (`eval/eval_retrieval.py`, so được dense / hybrid / rerank) và script chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo (`eval/eval_rag.py`).
 
 ## Hạn chế đã biết
 

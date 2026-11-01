@@ -21,6 +21,7 @@ frontend/
     │   ├── Sidebar.jsx            # Danh sách hội thoại, tạo mới / đổi tên / xoá, hồ sơ, tên user + đăng xuất
     │   ├── ProfileModal.jsx       # Form hồ sơ sức khỏe: năm sinh, bệnh nền, dị ứng thuốc, mang thai
     │   ├── MessageBubble.jsx      # 1 bong bóng chat; câu trả lời của bot render markdown (react-markdown)
+    │   ├── FacilityCards.jsx      # Thẻ bệnh viện agent gợi ý: địa chỉ, số điện thoại, chỉ đường
     │   └── ChatInput.jsx          # Ô nhập tin nhắn + nút Gửi
     └── utils/
         └── sessions.js            # Lời chào mặc định + đổi tin nhắn từ API sang dạng hiển thị
@@ -77,6 +78,7 @@ chatApi.streamChatMessage   POST /api/chat/stream  { message, conversation_id } 
     │                  đầu sidebar. Cuộc cũ thì đẩy lên đầu sidebar
     │   status       → bong bóng hiện "Đang tìm tài liệu… / Đang soạn…"
     │   sources      → lưu nguồn trích dẫn
+    │   facilities   → lưu thẻ nơi khám agent gợi ý (chỉ khi người dùng hỏi nơi khám)
     │   delta        → nối thêm chữ (render markdown + con trỏ nhấp nháy)
     │   done         → bỏ cờ pending.   error → bong bóng lỗi
     ▼
@@ -115,7 +117,10 @@ Component chỉ nhận props và gọi callback. Hiện danh sách hội thoại
 Form hồ sơ sức khỏe ([../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md)). Bệnh nền: tick các nhóm bệnh có trong dữ liệu (`GET /api/profile/options`) và gõ thêm; dị ứng thuốc: gõ tên, cách nhau bởi dấu phẩy; năm sinh; đang mang thai; bật / tắt "dùng hồ sơ khi trả lời". Nút Xóa hồ sơ chỉ hiện khi đã lưu. Esc hoặc bấm ra ngoài để đóng.
 
 ### `src/components/MessageBubble.jsx`, `ChatInput.jsx`
-Không đổi: bong bóng chat (markdown, nguồn trích dẫn, trạng thái chờ) và ô nhập.
+Bong bóng chat (markdown, thẻ nơi khám, nguồn trích dẫn, trạng thái chờ, kể cả "Đang tìm nơi khám phù hợp…") và ô nhập.
+
+### `src/components/FacilityCards.jsx`
+Thẻ bệnh viện agent gợi ý ([../docs/FACILITIES.md](../docs/FACILITIES.md)): tên, nhãn công/tư, cấp cứu, chỉ khám trẻ em; chuyên khoa; địa chỉ; số điện thoại (bấm để gọi); cảnh báo nếu chưa xác minh; nút Chỉ đường (Google Maps) và Website. Địa chỉ, số điện thoại lấy từ dữ liệu đã kiểm tra, không do model viết.
 
 ### `src/utils/sessions.js`
 - `WELCOME_MESSAGE`: lời chào hiện ở hội thoại chưa có tin nhắn. Chỉ hiển thị, không lưu vào DB.

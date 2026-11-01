@@ -28,9 +28,34 @@ class Source(BaseModel):
     citation: str | None = None
 
 
+class FacilityPhone(BaseModel):
+    label: str
+    number: str
+
+
+class Facility(BaseModel):
+    """Thẻ cơ sở y tế gợi ý (services/facility_service.py → facility_card)."""
+
+    id: str
+    name: str
+    ownership: Literal["cong", "tu"]
+    address: str | None = None
+    phones: list[FacilityPhone] = Field(default_factory=list)
+    emergency: bool | None = None  # None = trang chính thức không ghi
+    children_only: bool = False
+    website: str | None = None
+    verified: bool
+    checked_at: str
+    note: str | None = None
+    matched: Literal["chuyen_khoa", "da_khoa"]
+    specialty_labels: list[str] = Field(default_factory=list)
+    maps_url: str
+
+
 class ChatResponse(BaseModel):
     reply: str
     sources: list[Source] = Field(default_factory=list)
+    facilities: list[Facility] = Field(default_factory=list)
     disclaimer: str = (
         "Thông tin trên chỉ mang tính tham khảo, không thay thế cho chẩn đoán "
         "và tư vấn của bác sĩ hoặc chuyên gia y tế."
@@ -105,6 +130,7 @@ class MessageOut(BaseModel):
     role: Literal["user", "model"]
     content: str
     sources: list[Source] | None = None
+    facilities: list[Facility] | None = None
     created_at: datetime
 
 

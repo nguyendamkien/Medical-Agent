@@ -7,7 +7,13 @@ Người dùng phải đăng ký / đăng nhập mới chat được. Lịch s�
 ### Hạ tầng
 - `docker-compose.yml` ở thư mục gốc chạy **PostgreSQL 16** (`localhost:5432`) và **Adminer** để xem dữ liệu (`http://localhost:8080`).
 - Kết nối bằng SQLAlchemy 2 qua driver **`pg8000`** (thuần Python). Không dùng `psycopg` vì Windows Smart App Control chặn DLL của nó.
-- Quản lý bảng bằng **Alembic**. Migration đầu tiên tạo 3 bảng.
+- Quản lý bảng bằng **Alembic**. Các migration theo thứ tự:
+
+  | Revision | Nội dung |
+  |---|---|
+  | `008f4967fddd` | Tạo 3 bảng `users`, `conversations`, `messages` |
+  | `3b7c1e9a2f40` | Bảng `health_profiles` (hồ sơ sức khỏe, [HEALTH_PROFILE.md](HEALTH_PROFILE.md)) |
+  | `5d2a8c4e1b70` | Cột `messages.facilities` (thẻ gợi ý nơi khám, [FACILITIES.md](FACILITIES.md)) |
 
 ### Database
 
@@ -15,16 +21,17 @@ Người dùng phải đăng ký / đăng nhập mới chat được. Lịch s�
 |---|---|
 | `users` | `id` UUID, `email` (unique), `password_hash` (argon2), `display_name`, `created_at` |
 | `conversations` | `id` UUID, `user_id` → users, `title`, `created_at`, `updated_at` |
-| `messages` | `id` tự tăng, `conversation_id` → conversations, `role` (`user` / `model`), `content`, `sources` (JSONB), `created_at` |
+| `messages` | `id` tự tăng, `conversation_id` → conversations, `role` (`user` / `model`), `content`, `sources` (JSONB), `facilities` (JSONB, thẻ nơi khám agent đã gợi ý, null nếu không có), `created_at` |
+| `health_profiles` | `user_id` (khoá chính, → users), `birth_year`, `pregnant`, `conditions` / `allergies` (JSONB), `use_in_chat`, `updated_at` |
 
-Xóa user thì xóa luôn hội thoại; xóa hội thoại thì xóa luôn tin nhắn (`ON DELETE CASCADE`).
+Xóa user thì xóa luôn hội thoại và hồ sơ sức khỏe; xóa hội thoại thì xóa luôn tin nhắn (`ON DELETE CASCADE`).
 
 ### Backend
 
 | File | Nội dung |
 |---|---|
 | `app/db.py` | engine, `SessionLocal`, `Base`, `get_db()` |
-| `app/models.py` | 3 bảng ở trên |
+| `app/models.py` | các bảng ở trên |
 | `app/security.py` | băm mật khẩu argon2, tạo / kiểm tra JWT, `get_current_user` (sai / hết hạn → 401) |
 | `app/routers/auth.py` | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` |
 | `app/routers/conversations.py` | liệt kê, xem tin nhắn, đổi tên, xóa hội thoại. Hội thoại của người khác → 404 |
@@ -84,6 +91,7 @@ Chạy các lệnh trong `backend/` với venv đã kích hoạt. Trên Windows 
 | Xem dữ liệu | Adminer `http://localhost:8080`: **System = PostgreSQL**, Server `db`, `medical` / `medical`, DB `medical_agent` |
 | Xem bằng dòng lệnh | `docker compose exec db psql -U medical medical_agent` |
 | Thử API | `http://localhost:8000/docs`: login, rồi bấm **Authorize** và dán token (không kèm chữ `Bearer`) |
+| Sau khi kéo code mới | `python -m alembic upgrade head`. DB đã mới nhất thì lệnh không làm gì. Xem DB đang ở bản nào: `python -m alembic current`, bản mới nhất: `python -m alembic heads` |
 | Đổi cấu trúc bảng | sửa `app/models.py`, chạy `python -m alembic revision --autogenerate -m "mô tả"`, đọc lại file vừa sinh, rồi `python -m alembic upgrade head`. **Không sửa** migration đã chạy |
 | Tắt / bật DB | `docker compose stop` / `docker compose start` (dữ liệu vẫn còn) |
 | Xóa sạch DB | `docker compose down -v`, `docker compose up -d`, `python -m alembic upgrade head` |
@@ -97,6 +105,7 @@ Chạy các lệnh trong `backend/` với venv đã kích hoạt. Trên Windows 
 | `Application Control policy has blocked this file` | Gọi qua `python -m pip / uvicorn / alembic` |
 | Adminer báo `Connection refused` | Ô System đang là MySQL, chọn **PostgreSQL** |
 | `No module named 'alembic'` / `'app'` | Sai venv (phải là `backend/venv`) hoặc sai thư mục (phải đứng trong `backend/`) |
+| `column messages.facilities does not exist`, `relation "health_profiles" does not exist` (`UndefinedColumn` / `UndefinedTable`) | Code mới hơn DB: còn migration chưa chạy. Chạy `python -m alembic upgrade head` (chỉ thêm bảng / cột, không mất dữ liệu cũ), không cần khởi động lại backend |
 | Migration sinh ra rỗng | `alembic/env.py` thiếu `import app.models` hoặc `target_metadata` vẫn là `None` |
 | `RuntimeError: Chưa đặt JWT_SECRET` | Thêm vào `.env` rồi khởi động lại backend |
 | Bị đưa về màn đăng nhập "phiên đã hết hạn" | Token quá `JWT_EXPIRE_DAYS` ngày, hoặc `JWT_SECRET` vừa bị đổi. Đăng nhập lại, lịch sử vẫn còn |

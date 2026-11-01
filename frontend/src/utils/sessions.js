@@ -21,7 +21,7 @@ export function clearLegacySessions() {
   }
 }
 
-/** Đổi tin nhắn từ API ({ id, role, content, sources, created_at }) sang dạng MessageBubble dùng. */
-export function fromApiMessage({ role, content, sources }) {
-  return { role, content, sources: sources ?? [] };
+/** Đổi tin nhắn từ API ({ id, role, content, sources, facilities, created_at }) sang dạng MessageBubble dùng. */
+export function fromApiMessage({ role, content, sources, facilities }) {
+  return { role, content, sources: sources ?? [], facilities: facilities ?? [] };
 }

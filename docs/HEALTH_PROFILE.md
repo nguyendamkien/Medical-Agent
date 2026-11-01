@@ -94,7 +94,7 @@ Mọi API dùng `get_current_user` và khoá chính là `user.id`, nên chỉ đ
 
 ## Cài đặt
 
-Sau khi kéo code: `cd backend`, rồi `python -m alembic upgrade head` để tạo bảng `health_profiles`.
+Sau khi kéo code: `cd backend`, rồi `python -m alembic upgrade head` để tạo bảng `health_profiles`. Quên bước này thì API hồ sơ và chat báo `relation "health_profiles" does not exist`.
 
 ## Đánh giá
 

@@ -1,9 +1,13 @@
 """Tool của agent (xem docs/AGENTIC_RAG.md): khai báo cho Gemini và code chạy từng tool.
 
-Hai tool, cả hai chỉ đọc dữ liệu đã có trong index:
+Ba tool, đều chỉ đọc dữ liệu có sẵn:
 
     search_medical_docs(query, disease_group?)  bọc Retriever.search (hybrid + rerank + ngưỡng)
     get_article(document_id, section?)          đọc cả bài / một mục, ghép từ các chunk trong RAM
+    find_healthcare_facility(specialty, emergency?, for_child?)
+                                                gợi ý cơ sở y tế ở Hà Nội (services/facility_service.py);
+                                                danh sách đi thẳng xuống frontend thành thẻ, model chỉ
+                                                nhận số lượng để viết 1–3 câu dẫn
 
 ToolSession giữ trạng thái của MỘT request, những việc không giao cho model:
 - Đánh số [Nguồn i] xuyên suốt request: chunk của bài đã gặp dùng lại số cũ, bài mới đánh số
@@ -23,8 +27,23 @@ from app.config import get_settings
 from app.rag.profile import allergy_notes
 from app.rag.prompt import format_chunk, source_key
 from app.rag.retriever import Retriever
+from app.services.facility_service import SPECIALTIES, facility_card, search_facilities
 
 logger = logging.getLogger(__name__)
+
+FACILITY_TOOL = "find_healthcare_facility"
+# Cuối kết quả find_healthcare_facility. Model không nhận địa chỉ / số điện thoại, nên không chép
+# sai được; vẫn dặn để model không tự thêm từ kiến thức riêng.
+FACILITY_REMINDER = (
+	"(Danh sách hiện thành thẻ ngay dưới câu trả lời, kèm tên, địa chỉ, số điện thoại đã kiểm tra và "
+	"nút chỉ đường. Khi trả lời: 1–3 câu dẫn, vd \"Dưới đây là một số cơ sở ở Hà Nội có chuyên khoa "
+	"…\"; KHÔNG liệt kê tên cơ sở, KHÔNG viết địa chỉ hay số điện thoại; KHÔNG nói cơ sở nào tốt "
+	"nhất; nhắc gọi trước để xác nhận lịch khám. Có dấu hiệu cấp cứu thì câu đầu tiên vẫn là gọi 115.)"
+)
+NO_FACILITIES = (
+	"Không có cơ sở phù hợp trong dữ liệu. Dữ liệu chỉ gồm một số bệnh viện ở Hà Nội. Không tự kể tên "
+	"cơ sở nào; khuyên người dùng hỏi cơ sở y tế gần nhà hoặc gọi 115 nếu cấp cứu."
+)
 
 NO_RESULTS = "Không có tài liệu phù hợp với truy vấn này."
 # Nhắc lại ngay sau tài liệu, như build_rag_prompt đặt quy tắc cạnh CONTEXT. Chỉ nằm trong system
@@ -97,6 +116,40 @@ def tool_declarations(disease_groups: list[str]) -> dict[str, Any]:
 					"required": ["document_id"],
 				},
 			},
+			{
+				"name": FACILITY_TOOL,
+				"description": (
+					"Gợi ý bệnh viện / phòng khám ở HÀ NỘI theo chuyên khoa. Gọi khi người dùng hỏi nên "
+					"khám ở đâu, bệnh viện nào, đi khám chỗ nào. Danh sách (địa chỉ, số điện thoại) hiện "
+					"thành thẻ trên giao diện; bạn chỉ nhận tên các cơ sở. Chỉ có dữ liệu Hà Nội: người "
+					"dùng nói đang ở tỉnh khác thì KHÔNG gọi."
+				),
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"specialty": {
+							"type": "string",
+							"format": "enum",
+							"enum": list(SPECIALTIES),
+							"description": (
+								"Chuyên khoa theo bệnh / triệu chứng: tăng huyết áp, suy tim → tim_mach; dạ dày "
+								"→ tieu_hoa; gout, viêm khớp → co_xuong_khop; suy thận, sỏi thận → "
+								"than_tiet_nieu; hen → ho_hap; viêm da → da_lieu; viêm gan B → "
+								"gan_truyen_nhiem; thai kỳ → san_khoa. Không rõ → noi_tong_quat."
+							),
+						},
+						"emergency": {
+							"type": "boolean",
+							"description": "true nếu có dấu hiệu cấp cứu: chỉ lấy nơi có cấp cứu.",
+						},
+						"for_child": {
+							"type": "boolean",
+							"description": "true nếu người bệnh là trẻ em: ưu tiên bệnh viện nhi.",
+						},
+					},
+					"required": ["specialty"],
+				},
+			},
 		]
 	}
 
@@ -115,6 +168,13 @@ class ToolSession:
 		self._document_ids: set[str] = set()
 		self._partial_sections = 0
 		self.searches = 0  # số lần search_medical_docs đã chạy retriever
+		self.facilities: list[dict] = []  # thẻ cơ sở y tế gửi xuống frontend (find_healthcare_facility)
+
+	@property
+	def has_content(self) -> bool:
+		"""Request đã có gì để trả lời: chunk tài liệu hoặc danh sách cơ sở y tế. Chốt chặn "không có
+		tài liệu" của agent dùng cái này, để câu dẫn sau khi gợi ý nơi khám không bị chặn nhầm."""
+		return bool(self.results or self.facilities)
 
 	def run(self, name: str, args: dict[str, Any]) -> str:
 		"""Chạy một lời gọi tool, trả về text gửi lại cho model. Lỗi do model (tham số sai, id lạ)
@@ -129,6 +189,11 @@ class ToolSession:
 				output = self._search(str(args.get("query") or "").strip(), args.get("disease_group") or None)
 			elif name == "get_article":
 				output = self._get_article(str(args.get("document_id") or "").strip(), args.get("section") or None)
+			elif name == FACILITY_TOOL:
+				output = self._find_facility(
+					str(args.get("specialty") or ""), bool(args.get("emergency")), bool(args.get("for_child"))
+				)
+				entry["n_facilities"] = len(self.facilities)
 			else:
 				output = f"Không có tool tên {name!r}."
 				entry["error"] = "unknown_tool"
@@ -147,6 +212,28 @@ class ToolSession:
 
 	def _number(self, metadata: dict) -> int:
 		return self._numbers.setdefault(source_key(metadata), len(self._numbers) + 1)
+
+	def _find_facility(self, specialty: str, emergency: bool, for_child: bool) -> str:
+		if specialty not in SPECIALTIES:
+			raise ToolError(
+				"bad_specialty", f"Chuyên khoa {specialty!r} không có. Chọn một trong: {', '.join(SPECIALTIES)}."
+			)
+		found = search_facilities(specialty, emergency=emergency, for_child=for_child)
+		if not found:
+			return NO_FACILITIES
+		# Gọi nhiều lần (vd hai chuyên khoa) thì gộp, không lặp cơ sở.
+		have = {item["id"] for item in self.facilities}
+		self.facilities += [facility_card(item) for item in found if item["id"] not in have]
+		# Chỉ báo số lượng, không gửi tên: có tên thì model chép lại thành danh sách trùng với thẻ
+		# (eval 01/11: 4/8 câu), và giám khảo chấm danh sách đó là claim không có nguồn.
+		exact = sum(item["matched"] == "chuyen_khoa" for item in found)
+		parts = [f"{exact} cơ sở có chuyên khoa {SPECIALTIES[specialty]}"]
+		if len(found) > exact:
+			parts.append(f"{len(found) - exact} bệnh viện đa khoa")
+		summary = f"Đã tìm được {len(found)} cơ sở ở Hà Nội ({', '.join(parts)})" + (
+			", đều có cấp cứu" if emergency else ""
+		) + (", ưu tiên nơi khám trẻ em" if for_child else "") + "."
+		return f"{summary}\n\n{FACILITY_REMINDER}"
 
 	def _search(self, query: str, disease_group: str | None) -> str:
 		if not query:

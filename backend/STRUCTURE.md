@@ -1,6 +1,6 @@
 # Cấu trúc Backend (FastAPI + RAG)
 
-Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). Hồ sơ sức khỏe: xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
+Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). Hồ sơ sức khỏe: xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md). Gợi ý nơi khám: xem [../docs/FACILITIES.md](../docs/FACILITIES.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
 
 ## Cây thư mục
 
@@ -23,10 +23,12 @@ backend/
 │   │   ├── auth.py                # POST /api/auth/register, /login, GET /api/auth/me
 │   │   ├── conversations.py       # GET/PATCH/DELETE /api/conversations… (sidebar)
 │   │   ├── profile.py             # GET/PUT/DELETE /api/profile, /api/profile/options; load_chat_profile
+│   │   ├── facilities.py          # GET /api/facilities, /api/facilities/specialties (gợi ý nơi khám)
 │   │   └── chat.py                # POST /api/chat (trả một lần) và POST /api/chat/stream (SSE), lưu lịch sử
 │   ├── services/
 │   │   ├── rag_service.py         # Điều phối một câu hỏi: retrieve → prompt → Gemini → nguồn
 │   │   ├── agent_service.py       # Agent (AGENT_ENABLED=true): Gemini tự gọi tool tìm tài liệu
+│   │   ├── facility_service.py    # Tìm bệnh viện ở Hà Nội theo chuyên khoa (thuần code)
 │   │   └── gemini_service.py      # Gọi Google Gemini, chứa system instruction an toàn y tế
 │   ├── rag/
 │   │   ├── loader.py              # Đọc bài viết từ file JSONL
@@ -37,14 +39,16 @@ backend/
 │   │   ├── retriever.py           # Hybrid BM25 + dense, gộp RRF, ngưỡng, gọi rerank
 │   │   ├── reranker.py            # Cross-encoder bge-reranker-v2-m3 (mặc định bật)
 │   │   ├── prompt.py              # Ghép các chunk + câu hỏi thành prompt
-│   │   ├── tools.py               # Tool của agent: search_medical_docs, get_article
+│   │   ├── tools.py               # Tool của agent: search_medical_docs, get_article, find_healthcare_facility
 │   │   ├── profile.py             # Hồ sơ sức khỏe → khối prompt; quét thuốc dị ứng trong tài liệu
 │   │   └── guardrail.py           # Quét câu trả lời, che liều thuốc trước khi gửi (kể cả khi stream)
+│   ├── data/
+│   │   └── facilities_hanoi.jsonl # 24 bệnh viện ở Hà Nội, kiểm tra trên trang chính thức (commit vào git)
 │   ├── scripts/
 │   │   └── ingest.py              # Build vector index từ file dữ liệu
 │   └── storage/chroma/            # Dữ liệu Chroma trên đĩa (không nằm trong git)
 └── eval/
-    ├── golden_set.jsonl           # 100 câu hỏi chuẩn để đánh giá (12 câu kèm hồ sơ người hỏi)
+    ├── golden_set.jsonl           # 108 câu hỏi chuẩn (12 câu kèm hồ sơ, 8 câu gợi ý nơi khám)
     ├── eval_retrieval.py          # Đo retrieval (hit@k, MRR…)
     └── eval_rag.py                # Chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo
 ```
@@ -125,7 +129,7 @@ sửa app/models.py
 ```
 Không sửa file migration đã chạy. DB ghi phiên bản hiện tại trong bảng `alembic_version`.
 
-Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `AgentService` thay cho `RagService`: Gemini tự quyết định gọi `search_medical_docs` / `get_article` (0 đến `AGENT_MAX_TOOL_CALLS` lần) rồi mới trả lời; không còn bước viết lại câu hỏi. Chi tiết: [../docs/AGENTIC_RAG.md](../docs/AGENTIC_RAG.md).
+Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `AgentService` thay cho `RagService`: Gemini tự quyết định gọi `search_medical_docs` (0 đến `AGENT_MAX_TOOL_CALLS` lần), `get_article`, và `find_healthcare_facility` khi người dùng hỏi nơi khám, rồi mới trả lời; không còn bước viết lại câu hỏi. Hồ sơ sức khỏe (nếu có) nằm trong system instruction. Chi tiết: [../docs/AGENTIC_RAG.md](../docs/AGENTIC_RAG.md).
 
 ## Giải thích từng file
 
@@ -160,7 +164,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 ### `app/models.py`
 - `User` (`users`): `id` UUID, `email` (unique), `password_hash`, `display_name`, `created_at`.
 - `Conversation` (`conversations`): `id` UUID, `user_id` → users (`ON DELETE CASCADE`), `title`, `created_at`, `updated_at`. Có index `(user_id, updated_at)` để tải sidebar.
-- `Message` (`messages`): `id` BIGSERIAL (sắp theo id = đúng thứ tự gửi), `conversation_id` → conversations (`ON DELETE CASCADE`), `role` (`user` / `model`), `content` TEXT, `sources` JSONB (chỉ ở tin của bot), `created_at`. Có index `(conversation_id, id)`.
+- `Message` (`messages`): `id` BIGSERIAL (sắp theo id = đúng thứ tự gửi), `conversation_id` → conversations (`ON DELETE CASCADE`), `role` (`user` / `model`), `content` TEXT, `sources` JSONB (chỉ ở tin của bot), `facilities` JSONB (thẻ nơi khám agent đã gợi ý, nếu có), `created_at`. Có index `(conversation_id, id)`.
 - `HealthProfile` (`health_profiles`): `user_id` vừa là khoá chính vừa → users (`ON DELETE CASCADE`), nên mỗi user tối đa một hồ sơ. `birth_year`, `pregnant`, `conditions` / `allergies` (JSONB list), `use_in_chat`, `updated_at`. Xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md).
 - Sửa file này thì phải tạo migration mới (xem luồng 4 ở trên).
 
@@ -210,7 +214,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `get_rag_service()`: singleton — `GeminiService` và `Retriever` (kèm việc dựng chỉ mục BM25) chỉ được tạo ở request đầu tiên rồi tái sử dụng.
 
 ### `app/services/agent_service.py`
-- `AgentService._run`: vòng lặp viết tay. Mỗi vòng gọi `GeminiService.agent_turn`; nhận lời gọi tool thì chạy bằng `ToolSession`, gửi kết quả lại rồi lặp; nhận text thì stream về. Hai giới hạn: `AGENT_MAX_TOOL_CALLS` đếm lần tìm (hết thì lần tìm tiếp nhận "hết lượt tìm", `get_article` vẫn chạy); `AGENT_MAX_TOTAL_CALLS` đếm mọi lời gọi tool (đủ thì vòng kế tiếp cấm gọi tool).
+- `AgentService._run`: vòng lặp viết tay. Mỗi vòng gọi `GeminiService.agent_turn`; nhận lời gọi tool thì chạy bằng `ToolSession`, gửi kết quả lại rồi lặp; nhận text thì stream về. Hai giới hạn: `AGENT_MAX_TOOL_CALLS` đếm lần tìm `search_medical_docs` (hết thì lần tìm tiếp nhận "hết lượt tìm", `get_article` và `find_healthcare_facility` vẫn chạy); `AGENT_MAX_TOTAL_CALLS` đếm mọi lời gọi tool (đủ thì vòng kế tiếp cấm gọi tool).
 - Chốt chặn (`AGENT_NO_CONTEXT_GUARD`, mặc định bật): model định trả lời khi request chưa lấy được chunk nào → bỏ câu đó, trả lời bằng `build_no_context_prompt` như pipeline cũ. Model không sinh text → trả lời bằng `build_prompt` trên các chunk đã lấy.
 - `ask_with_trace(...)`: trả `reply`, `sources`, `results` (mọi chunk đã lấy), `trace` (mỗi lần gọi tool: tên, tham số, số chunk mới, thời gian, lỗi) và `fallback`. `ask_with_context(...)` cùng dạng với `RagService` để dùng trong `eval_rag.py`.
 - `get_agent_service()`: singleton, như `get_rag_service()`.
@@ -272,9 +276,14 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `AgentService._run` bọc mọi `delta` qua guardrail khi `DOSE_GUARDRAIL=true`; cụm bị che ghi vào `dose_redactions`.
 
 ### `app/rag/tools.py`
-- `tool_declarations(disease_groups)`: khai báo `search_medical_docs(query, disease_group?)` và `get_article(document_id, section?)` cho Gemini; `enum` nhóm bệnh lấy từ `Retriever.disease_groups`.
+- `tool_declarations(disease_groups)`: khai báo `search_medical_docs(query, disease_group?)`, `get_article(document_id, section?)` và `find_healthcare_facility(specialty, emergency?, for_child?)` cho Gemini; `enum` nhóm bệnh lấy từ `Retriever.disease_groups`, `enum` chuyên khoa từ `facility_service.SPECIALTIES`.
 - `ToolSession`: trạng thái tool của một request — đánh số `[Nguồn i]` xuyên suốt request (bài đã gặp dùng lại số cũ), không trả lại chunk đã trả, `get_article` chỉ nhận `document_id` đã xuất hiện trong kết quả tìm kiếm, cắt bài ở 8.000 ký tự. Chunk thuộc mục bị cắt được ghi "Đoạn k/n của mục"; mục chưa có đủ đoạn thì kết quả kèm gợi ý gọi `get_article` (vết chạy ghi `partial_sections`). Tham số sai trả về thành text để model tự sửa. Cuối mọi kết quả `search_medical_docs` / `get_article` có `DOSE_REMINDER` (nhắc không nêu liều thuốc), vì chỉ để quy tắc trong system instruction thì agent vẫn nêu liều khi tài liệu có ghi. `results` giữ mọi chunk đã trả theo thứ tự đánh số, nên `collect_sources(results)` khớp với số trong câu trả lời.
 - `ToolSession(retriever, allergies)`: có thuốc dị ứng trong hồ sơ thì kết quả tool kèm dòng nhắc cảnh báo cho thuốc được nhắc trong chunk (vết chạy ghi `allergy_hits`).
+- `find_healthcare_facility(specialty, emergency?, for_child?)`: gọi `facility_service.search_facilities`, lưu thẻ vào `session.facilities` (agent phát sự kiện SSE `facilities`), chỉ trả **tên** cơ sở cho model kèm `FACILITY_REMINDER`. `session.has_content` (có chunk hoặc có cơ sở) thay cho `session.results` trong chốt chặn "không có tài liệu". Tool này không tính vào lượt tìm.
+
+### `app/services/facility_service.py`
+- `load_facilities()`: đọc `app/data/facilities_hanoi.jsonl` một lần; mã chuyên khoa lạ / id trùng thì báo lỗi.
+- `search_facilities(specialty, emergency, for_child, limit)`: đúng chuyên khoa trước, đa khoa sau; trẻ em ưu tiên nhi; đã xác minh trước. `maps_url()`: link Google Maps theo tên + địa chỉ. `DISEASE_GROUP_SPECIALTY`: nhóm bệnh → chuyên khoa. Chi tiết: [../docs/FACILITIES.md](../docs/FACILITIES.md).
 
 ### `app/rag/profile.py`
 - `UserProfile`: năm sinh, mang thai, bệnh nền, dị ứng. `from_dict` dùng cho golden set.
@@ -288,6 +297,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - Bộ golden test và hai script đánh giá — cách chạy và kết quả: [../docs/RAG_EVAL.md](../docs/RAG_EVAL.md).
 - `eval_rag.py --agent`: chạy `AgentService`, lưu vết chạy và chỉ số hành vi gọi tool; `--resume` chạy tiếp từ `<out>.partial.jsonl` khi bị ngắt.
 - Câu có trường `profile` chạy kèm hồ sơ; `must_mention` / `must_not_mention` chấm thành `profile_ok` (`--types profile` để chỉ chạy nhóm này).
+- Câu có `expect_facility` chấm lời gọi `find_healthcare_facility` thành `facility_ok` (`--types facility`).
 
 ## Vì sao tách theo layer như vậy?
 

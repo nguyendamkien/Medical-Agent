@@ -79,7 +79,13 @@ def _prepare_conversation(
     return conversation.id, conversation.title, history
 
 
-def _save_turn(conversation_id: uuid.UUID, question: str, reply: str, sources: list[dict]) -> None:
+def _save_turn(
+    conversation_id: uuid.UUID,
+    question: str,
+    reply: str,
+    sources: list[dict],
+    facilities: list[dict] | None = None,
+) -> None:
     """Lưu cả câu hỏi và câu trả lời trong MỘT transaction, chỉ khi đã trả lời xong.
 
     Dùng session riêng (SessionLocal) thay vì session của request, vì với StreamingResponse,
@@ -87,7 +93,10 @@ def _save_turn(conversation_id: uuid.UUID, question: str, reply: str, sources: l
     """
     with SessionLocal() as db:
         db.add(Message(conversation_id=conversation_id, role="user", content=question))
-        db.add(Message(conversation_id=conversation_id, role="model", content=reply, sources=sources))
+        db.add(Message(
+            conversation_id=conversation_id, role="model", content=reply, sources=sources,
+            facilities=facilities or None,
+        ))
         db.execute(
             update(Conversation).where(Conversation.id == conversation_id).values(updated_at=func.now())
         )
@@ -101,15 +110,20 @@ def chat(
     service = _get_service()
     conversation_id, _, history = _prepare_conversation(request, user, db)
     profile = load_chat_profile(db, user)
+    facilities: list[dict] = []
     try:
-        reply, sources = service.ask(request.message, history, profile)
+        if isinstance(service, AgentService):
+            result = service.ask_with_trace(request.message, history, profile)
+            reply, sources, facilities = result["reply"], result["sources"], result["facilities"]
+        else:
+            reply, sources = service.ask(request.message, history, profile)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Không thể lấy phản hồi từ Gemini: {exc}") from exc
 
-    _save_turn(conversation_id, request.message, reply, [s.model_dump() for s in sources])
-    return ChatResponse(reply=reply, sources=sources)
+    _save_turn(conversation_id, request.message, reply, [s.model_dump() for s in sources], facilities)
+    return ChatResponse(reply=reply, sources=sources, facilities=facilities)
 
 
 def _sse(event: str, data: dict) -> str:
@@ -120,7 +134,7 @@ def _sse(event: str, data: dict) -> str:
 def chat_stream(
     request: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> StreamingResponse:
-    """Sự kiện: conversation → status → sources → delta (nhiều lần) → done.
+    """Sự kiện: conversation → status → sources (→ facilities) → delta (nhiều lần) → done.
 
     `conversation` { id, title } luôn đến đầu tiên, để frontend biết id của hội thoại vừa tạo.
     """
@@ -134,12 +148,15 @@ def chat_stream(
         yield _sse("conversation", {"id": str(conversation_id), "title": title})
         reply_parts: list[str] = []
         sources: list[dict] = []
+        facilities: list[dict] = []
         try:
             for event, data in service.ask_stream(request.message, history, profile):
                 if event == "delta":
                     reply_parts.append(data["text"])  # chữ đã qua guardrail liều thuốc
                 elif event == "sources":
                     sources = data["sources"]  # sự kiện sau chứa danh sách đầy đủ hơn
+                elif event == "facilities":
+                    facilities = data["facilities"]  # như sources: sự kiện sau là danh sách đầy đủ
                 yield _sse(event, data)
         except Exception as exc:
             logger.exception("Lỗi khi stream câu trả lời")
@@ -147,7 +164,7 @@ def chat_stream(
             return  # không lưu câu trả lời dở
 
         try:
-            _save_turn(conversation_id, request.message, "".join(reply_parts), sources)
+            _save_turn(conversation_id, request.message, "".join(reply_parts), sources, facilities)
         except Exception:
             logger.exception("Không lưu được lượt chat vào DB")
             yield _sse("error", {"detail": "Đã trả lời nhưng không lưu được vào lịch sử."})

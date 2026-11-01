@@ -12,21 +12,23 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
    crawl 3 nguồn          100 bài, 10 nhóm bệnh          chunk + embedding OpenAI   app/storage/chroma
 
                         (2) Mỗi câu hỏi của người dùng (đã đăng nhập)
- Frontend (React)  ──►  POST /api/chat/stream  ──►  kiểm tra token, đọc lịch sử hội thoại từ PostgreSQL
-   + token JWT          { message,               ──►  agent: Gemini tự gọi tool tìm tài liệu
-                          conversation_id }        (hybrid BM25 + dense, gộp RRF, rerank cross-encoder)
+ Frontend (React)  ──►  POST /api/chat/stream  ──►  kiểm tra token, đọc lịch sử hội thoại + hồ sơ sức khỏe từ PostgreSQL
+   + token JWT          { message,               ──►  agent: Gemini tự gọi tool
+                          conversation_id }          · tìm tài liệu (hybrid BM25 + dense, gộp RRF, rerank cross-encoder)
+                                                     · gợi ý bệnh viện ở Hà Nội (khi người dùng hỏi nơi khám)
                                                                        │
- Frontend hiển thị  ◄──  SSE: sources, từng đoạn trả lời  ◄──  Gemini sinh câu trả lời
- câu trả lời + nguồn                                            từ tài liệu + lịch sử chat
+ Frontend hiển thị  ◄──  SSE: sources, facilities,  ◄──  Gemini sinh câu trả lời
+ câu trả lời, nguồn,      từng đoạn trả lời              từ tài liệu + lịch sử chat + hồ sơ
+ thẻ nơi khám
                                                   ──►  trả lời xong: lưu câu hỏi + câu trả lời vào PostgreSQL
 ```
 
 | Thư mục                           | Vai trò                                       | Công nghệ                                                                             |
 | ----------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [backend/](backend/)                 | API chat + pipeline RAG, đăng nhập, lưu lịch sử chat | FastAPI, OpenAI embedding, Gemini API, ChromaDB, BM25, ONNX Runtime (rerank), PostgreSQL (SQLAlchemy, Alembic), JWT |
-| [frontend/](frontend/)               | Giao diện đăng nhập + chat, danh sách hội thoại | React 19, Vite                                                                          |
+| [frontend/](frontend/)               | Giao diện đăng nhập + chat, danh sách hội thoại, hồ sơ sức khỏe, thẻ gợi ý nơi khám | React 19, Vite                                                                          |
 | [data-collection/](data-collection/) | Crawler thu thập dữ liệu y tế              | requests, BeautifulSoup                                                                 |
-| [docs/](docs/)                       | Tài liệu pipeline RAG, cách đánh giá, đăng nhập + lịch sử chat | —                                                                                      |
+| [docs/](docs/)                       | Tài liệu pipeline RAG, agent, cách đánh giá, đăng nhập + lịch sử chat, hồ sơ sức khỏe, gợi ý nơi khám | —                                                                                      |
 | [docker-compose.yml](docker-compose.yml) | PostgreSQL 16 + Adminer (xem dữ liệu)     | Docker                                                                                  |
 
 ## Tài liệu
@@ -36,6 +38,7 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
 - [docs/RAG_EVAL.md](docs/RAG_EVAL.md): bộ golden test, script đo retrieval và chấm end-to-end theo tiêu chí RAG, kết quả đo.
 - [docs/AUTH_CHAT_HISTORY.md](docs/AUTH_CHAT_HISTORY.md): đăng ký / đăng nhập (JWT) và lưu lịch sử chat bằng PostgreSQL. Ghi lại những gì đã làm, các bước cài đặt, thao tác thường dùng và cách xử lý lỗi.
 - [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md): hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) đưa vào prompt để agent tìm đúng tài liệu và cảnh báo dị ứng.
+- [docs/FACILITIES.md](docs/FACILITIES.md): gợi ý bệnh viện ở Hà Nội theo chuyên khoa (tool `find_healthcare_facility`), dữ liệu kiểm tra trên trang chính thức. Đi qua code từng bước: [docs/FACILITIES_WALKTHROUGH.md](docs/FACILITIES_WALKTHROUGH.md).
 - [backend/STRUCTURE.md](backend/STRUCTURE.md): cấu trúc code backend và luồng xử lý một request.
 - [frontend/STRUCTURE.md](frontend/STRUCTURE.md): cấu trúc code frontend, luồng đăng nhập và gửi tin nhắn.
 - [data-collection/README.md](data-collection/README.md): crawler, nguồn dữ liệu, bản quyền.
@@ -88,8 +91,10 @@ Mở Docker Desktop, rồi chạy ở thư mục gốc của repo:
 docker compose up -d                 # PostgreSQL ở localhost:5432, Adminer ở http://localhost:8080
 
 cd backend
-python -m alembic upgrade head       # tạo các bảng users, conversations, messages
+python -m alembic upgrade head       # tạo / cập nhật bảng: users, conversations, messages, health_profiles
 ```
+
+**Mỗi lần kéo code mới, chạy lại `python -m alembic upgrade head`.** Code có migration mới mà DB chưa chạy thì backend báo lỗi kiểu `column messages.facilities does not exist`. DB đã mới nhất thì lệnh không làm gì.
 
 `DATABASE_URL` mặc định trong `.env.example` đã khớp với `docker-compose.yml`. Xem dữ liệu bằng Adminer: `http://localhost:8080`, **System = PostgreSQL**, Server `db`, user/mật khẩu `medical`/`medical`, database `medical_agent`.
 
@@ -126,6 +131,7 @@ npm run dev
 cd backend
 python -m eval.eval_retrieval      # đo retrieval trên golden set, < $0.001
 python -m eval.eval_rag            # chấm toàn bộ pipeline bằng LLM giám khảo, ~10 phút
+python -m eval.eval_rag --agent --types profile,facility --workers 1   # chỉ câu hồ sơ sức khỏe + gợi ý nơi khám
 ```
 
 Chi tiết và kết quả: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
@@ -184,11 +190,31 @@ Mọi API trừ đăng ký / đăng nhập đều **bắt buộc đăng nhập**
 | API | Ý nghĩa |
 |---|---|
 | `GET /api/conversations` | Danh sách hội thoại của user, mới nhất trước: `[{ id, title, created_at, updated_at }]` |
-| `GET /api/conversations/{id}/messages` | Tin nhắn theo thứ tự: `[{ id, role: "user"\|"model", content, sources, created_at }]` |
+| `GET /api/conversations/{id}/messages` | Tin nhắn theo thứ tự: `[{ id, role: "user"\|"model", content, sources, facilities, created_at }]` |
 | `PATCH /api/conversations/{id}` | Đổi tên, body `{ title }` |
 | `DELETE /api/conversations/{id}` | Xóa hội thoại kèm toàn bộ tin nhắn (`204`) |
 
 Hội thoại của user khác trả `404`. Không có API tạo hội thoại: hội thoại được tạo khi gửi câu hỏi đầu tiên.
+
+### Hồ sơ sức khỏe
+
+| API | Ý nghĩa |
+|---|---|
+| `GET /api/profile` | Hồ sơ của user: `{ birth_year, pregnant, conditions, allergies, use_in_chat, updated_at }`. Chưa có thì hồ sơ rỗng, `updated_at: null` |
+| `PUT /api/profile` | Lưu cả hồ sơ (tạo hoặc ghi đè), body như trên trừ `updated_at` |
+| `DELETE /api/profile` | Xóa hồ sơ (`204`) |
+| `GET /api/profile/options` | `{ conditions }`: các nhóm bệnh có trong dữ liệu, để gợi ý ở form |
+
+Chi tiết: [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md).
+
+### Gợi ý nơi khám
+
+| API | Ý nghĩa |
+|---|---|
+| `GET /api/facilities?specialty=&emergency=&for_child=&limit=` | Bệnh viện ở Hà Nội theo chuyên khoa, cùng logic với tool của agent |
+| `GET /api/facilities/specialties` | Mã chuyên khoa → tên, nhóm bệnh → chuyên khoa |
+
+Chi tiết: [docs/FACILITIES.md](docs/FACILITIES.md).
 
 ### `POST /api/chat`
 
@@ -209,13 +235,15 @@ Response:
   "sources": [
     { "title": "…", "url": "https://…", "citation": "Theo Báo Sức khỏe & Đời sống - …" }
   ],
+  "facilities": [],
   "disclaimer": "Thông tin trên chỉ mang tính tham khảo, không thay thế …"
 }
 ```
 
 - `conversation_id` để trống (hoặc `null`) ở câu hỏi đầu tiên thì server tạo hội thoại mới, tiêu đề lấy từ câu hỏi.
-- Server tự đọc lịch sử (`HISTORY_MAX_TURNS` lượt gần nhất) từ DB. Client **không gửi** `history`.
-- Trả lời xong, server lưu câu hỏi và câu trả lời (kèm `sources`) vào DB. Lỗi giữa chừng thì không lưu gì.
+- Server tự đọc lịch sử (`HISTORY_MAX_TURNS` lượt gần nhất) và hồ sơ sức khỏe (nếu user bật "dùng trong chat") từ DB. Client **không gửi** `history`.
+- `facilities`: thẻ bệnh viện agent gợi ý khi người dùng hỏi nơi khám, rỗng ở các câu khác.
+- Trả lời xong, server lưu câu hỏi và câu trả lời (kèm `sources`, `facilities`) vào DB. Lỗi giữa chừng thì không lưu gì.
 - Lỗi: `401` khi chưa đăng nhập, `404` khi hội thoại không thuộc user, `500` khi cấu hình sai (vd. thiếu API key), `502` khi gọi Gemini thất bại (mạng, quota, key sai, model không tồn tại).
 
 ### `POST /api/chat/stream`
@@ -225,8 +253,9 @@ Cùng request với `/api/chat`, nhưng trả về **Server-Sent Events** để 
 | Sự kiện | `data` | Ý nghĩa |
 |---|---|---|
 | `conversation` | `{"id": "…", "title": "…"}` | Luôn đến đầu tiên: id của hội thoại (id mới nếu vừa tạo) |
-| `status` | `{"stage": "thinking" \| "retrieving" \| "reading" \| "generating", …}` | Bước đang chạy. Agent gửi kèm `query` khi tìm, `document_id` khi đọc bài |
+| `status` | `{"stage": "thinking" \| "retrieving" \| "reading" \| "finding_facility" \| "generating", …}` | Bước đang chạy. Agent gửi kèm `query` khi tìm, `document_id` khi đọc bài |
 | `sources` | `{"sources": [{title, url, citation}]}` | Nguồn tham khảo. Agent gửi lại sau mỗi lần gọi tool, mỗi lần là danh sách đầy đủ |
+| `facilities` | `{"facilities": [{name, address, phones, maps_url, …}]}` | Chỉ khi agent gợi ý nơi khám: thẻ bệnh viện, danh sách đầy đủ tới lúc đó |
 | `delta` | `{"text": "…"}` | Một đoạn câu trả lời. Nối các `delta` lại thành câu trả lời đầy đủ |
 | `done` | `{"disclaimer": "…"}` | Kết thúc, lượt chat đã được lưu |
 | `error` | `{"detail": "…"}` | Lỗi khi stream đã bắt đầu (HTTP status lúc đó đã là 200). Lượt này không được lưu |
@@ -239,7 +268,7 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 .
 ├── docker-compose.yml            # PostgreSQL 16 + Adminer
 ├── backend/
-│   ├── main.py                   # Khởi tạo FastAPI + CORS, gắn router auth / conversations / chat
+│   ├── main.py                   # Khởi tạo FastAPI + CORS, gắn router auth / conversations / chat / profile / facilities
 │   ├── requirements.txt
 │   ├── .env.example
 │   ├── alembic.ini, alembic/     # Migration tạo / sửa bảng PostgreSQL
@@ -248,16 +277,20 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 │   │   ├── config.py             # Settings đọc từ .env
 │   │   ├── schemas.py            # Pydantic models (request/response)
 │   │   ├── db.py                 # Kết nối PostgreSQL (SQLAlchemy engine, session)
-│   │   ├── models.py             # Bảng users, conversations, messages
+│   │   ├── models.py             # Bảng users, conversations, messages, health_profiles
 │   │   ├── security.py           # Băm mật khẩu (argon2), JWT, get_current_user
 │   │   ├── routers/
 │   │   │   ├── auth.py           # Đăng ký, đăng nhập, /me
 │   │   │   ├── conversations.py  # Danh sách / tin nhắn / đổi tên / xoá hội thoại
+│   │   │   ├── profile.py        # Hồ sơ sức khỏe
+│   │   │   ├── facilities.py     # Gợi ý bệnh viện ở Hà Nội
 │   │   │   └── chat.py           # POST /api/chat, POST /api/chat/stream (SSE), lưu lịch sử
 │   │   ├── services/
 │   │   │   ├── rag_service.py    # Điều phối: retrieve → gọi Gemini → gom nguồn
-│   │   │   ├── agent_service.py  # Agent: Gemini tự gọi tool tìm tài liệu (mặc định)
+│   │   │   ├── agent_service.py  # Agent: Gemini tự gọi tool (mặc định)
+│   │   │   ├── facility_service.py # Tìm bệnh viện theo chuyên khoa
 │   │   │   └── gemini_service.py # Gọi Gemini, chứa system prompt an toàn y tế
+│   │   ├── data/facilities_hanoi.jsonl # 24 bệnh viện ở Hà Nội, kiểm tra trên trang chính thức
 │   │   ├── rag/
 │   │   │   ├── loader.py         # Đọc JSONL
 │   │   │   ├── chunker.py        # Chia chunk theo section
@@ -266,18 +299,21 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 │   │   │   ├── bm25.py           # Chỉ mục BM25 trong RAM (tìm theo từ khoá)
 │   │   │   ├── retriever.py      # Hybrid BM25 + dense, gộp RRF, ngưỡng, gọi rerank
 │   │   │   ├── reranker.py       # Cross-encoder bge-reranker-v2-m3 (ONNX)
-│   │   │   └── prompt.py         # Ghép context + câu hỏi thành prompt
+│   │   │   ├── prompt.py         # Ghép context + câu hỏi thành prompt
+│   │   │   ├── profile.py        # Hồ sơ sức khỏe → prompt, quét thuốc dị ứng
+│   │   │   ├── tools.py          # Tool của agent: tìm tài liệu, đọc bài, gợi ý nơi khám
+│   │   │   └── guardrail.py      # Che liều thuốc trong câu trả lời
 │   │   └── scripts/ingest.py     # Tạo vector index
 │   └── eval/
-│       ├── golden_set.jsonl      # 88 câu hỏi chuẩn
+│       ├── golden_set.jsonl      # 108 câu hỏi chuẩn
 │       ├── eval_retrieval.py     # Đo retrieval
 │       └── eval_rag.py           # Chấm end-to-end bằng LLM giám khảo
-├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md
+├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md, FACILITIES.md, FACILITIES_WALKTHROUGH.md
 ├── frontend/
 │   └── src/
 │       ├── App.jsx               # Đăng nhập, danh sách hội thoại, gửi tin nhắn
 │       ├── api/chatApi.js        # Gọi backend (gắn token, xử lý 401)
-│       ├── components/           # AuthScreen, Sidebar, MessageBubble, ChatInput
+│       ├── components/           # AuthScreen, Sidebar, MessageBubble, ChatInput, ProfileModal, FacilityCards
 │       └── utils/sessions.js     # Lời chào, đổi tin nhắn từ API sang dạng hiển thị
 └── data-collection/
     ├── run_crawl.py              # CLI chạy crawler
@@ -291,10 +327,14 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 - Prompt RAG yêu cầu Gemini **chỉ trả lời dựa trên context** tìm được; nếu không đủ thông tin thì nói rõ là chưa tìm thấy, không bịa. Đo trên golden set: 5/5 câu ngoài phạm vi dữ liệu đều được trả lời "chưa tìm thấy thông tin".
 - Không chẩn đoán cá nhân, không kê đơn hay liều thuốc; khuyên gọi **115** hoặc đến cơ sở y tế khi có dấu hiệu cấp cứu.
 - Mỗi câu trả lời kèm danh sách nguồn (link bài gốc) và câu disclaimer cố định.
+- Liều thuốc lọt vào câu trả lời bị guardrail che bằng code trước khi tới người dùng.
+- Thuốc người dùng ghi dị ứng trong hồ sơ: code quét tài liệu và buộc câu trả lời cảnh báo.
+- Gợi ý nơi khám: địa chỉ, số điện thoại lấy từ dữ liệu đã kiểm tra trên trang chính thức, **không do model viết**; không xếp hạng bệnh viện; câu cấp cứu vẫn khuyên gọi 115 trước.
 
 ## Dữ liệu người dùng
 
 - Lịch sử chat là dữ liệu sức khỏe nhạy cảm, nên được lưu theo tài khoản trong PostgreSQL. Mỗi user chỉ đọc được hội thoại của mình, và có thể xóa từng hội thoại.
+- Hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) do user tự khai, không ghi vào log, xóa được bất cứ lúc nào. Khi user bật "dùng trong chat", hồ sơ được gửi cho Gemini kèm mỗi câu hỏi.
 - Mật khẩu chỉ lưu dạng băm argon2. Token đăng nhập (JWT) được ký bằng `JWT_SECRET` và chỉ chứa id user.
 - `backend/.env` (API key, `JWT_SECRET`) không được commit. Mật khẩu PostgreSQL trong `docker-compose.yml` chỉ dùng khi dev trên máy, phải đổi trước khi deploy.
 
@@ -317,6 +357,7 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 | `RuntimeError: Chưa đặt JWT_SECRET`                                               | Thêm `JWT_SECRET` vào `backend/.env` rồi khởi động lại backend |
 | Adminer báo `Connection refused`                                                   | Ô System đang là MySQL. Chọn **PostgreSQL** |
 | `relation "users" does not exist`                                                  | Chưa tạo bảng: `python -m alembic upgrade head` trong `backend/` |
+| `column messages.facilities does not exist` / `relation "health_profiles" does not exist` | Code mới hơn DB, còn migration chưa chạy: `python -m alembic upgrade head` trong `backend/` (chỉ thêm bảng / cột, không mất dữ liệu) |
 | Đang dùng bị đưa về màn đăng nhập "Phiên đăng nhập đã hết hạn"                     | Token quá `JWT_EXPIRE_DAYS` ngày, hoặc `JWT_SECRET` vừa bị đổi. Đăng nhập lại; lịch sử vẫn còn |
 
 ## Bản quyền dữ liệu

@@ -84,6 +84,9 @@ class Message(Base):
     # JSONB: lưu nguyên danh sách nguồn trích dẫn RAG [{title, url, citation}, ...] của câu trả lời.
     # None với tin nhắn của user.
     sources: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Thẻ cơ sở y tế agent gợi ý (find_healthcare_facility, docs/FACILITIES.md), lưu nguyên như lúc
+    # gửi để mở lại hội thoại vẫn thấy đúng danh sách đã gợi ý. None khi không có.
+    facilities: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

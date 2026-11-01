@@ -1,6 +1,8 @@
 # Agentic RAG — kế hoạch chuyển chatbot thành agent
 
 > **Trạng thái (21/10/2026): agent bật mặc định** (`AGENT_ENABLED=true`). Cả 4 bước xong; đo lại 88 câu sau các sửa đổi đạt mọi điều kiện bật (xem "Đo lại sau các sửa đổi (21/10/2026)" ở bước 4): chất lượng tổng bằng pipeline cũ, câu nhiều ý tốt hơn, 0 liều thuốc trên 88 câu trả lời, câu nhiều ý 24 s. Pipeline cố định vẫn giữ, chọn bằng `AGENT_ENABLED=false` — gọi Gemini ít hơn (1–2 lần / câu thay vì 2–3), hợp khi quota hạn chế.
+>
+> **Cập nhật 01/11/2026:** tài liệu này là kế hoạch và nhật ký của 4 bước, viết khi agent có 2 tool. Sau đó agent có thêm tool thứ 3 `find_healthcare_facility` (gợi ý bệnh viện ở Hà Nội, [FACILITIES.md](FACILITIES.md)) và nhận hồ sơ sức khỏe người hỏi trong system instruction ([HEALTH_PROFILE.md](HEALTH_PROFILE.md)). Tóm tắt hiện trạng: [AGENT_SUMMARY.md](AGENT_SUMMARY.md).
 
 ## Khác gì so với hiện tại
 
@@ -30,7 +32,7 @@ Cái giá: agent tự do hơn nên khó kiểm soát hơn (thời gian, số l�
 
 ## Các tool
 
-Agent có 2 tool. Cả hai chỉ đọc dữ liệu đã có trong Chroma, không gọi ra ngoài.
+Agent có 2 tool. Cả hai chỉ đọc dữ liệu đã có trong Chroma, không gọi ra ngoài. (Từ 01/11/2026 có thêm `find_healthcare_facility`, đọc danh sách bệnh viện trong `app/data/facilities_hanoi.jsonl`, xem [FACILITIES.md](FACILITIES.md).)
 
 ### `search_medical_docs` — bước 1, mở rộng ở bước 3
 

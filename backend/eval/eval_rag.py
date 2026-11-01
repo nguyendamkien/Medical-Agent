@@ -182,7 +182,29 @@ def agent_metrics(item: dict, result: dict) -> dict:
 		"dose_redactions": result.get("dose_redactions", []),
 		# Câu không cần tài liệu (chào hỏi, ngoài lĩnh vực) mà vẫn gọi tool.
 		"searched_needlessly": item["expected_behavior"] in ("decline_off_topic", "greet") and not no_tool,
+		**facility_check(item, trace),
 	}
+
+
+def facility_check(item: dict, trace: list[dict]) -> dict:
+	"""Câu có `expect_facility` (docs/FACILITIES.md): agent có gọi find_healthcare_facility đúng không.
+	None = không được gọi; dict = phải có lời gọi khớp mọi khoá ghi trong dict (specialty, emergency,
+	for_child; khoá không ghi thì không xét)."""
+	if "expect_facility" not in item:
+		return {}
+	calls = [call for call in trace if call["tool"] == "find_healthcare_facility"]
+	expected = item["expect_facility"]
+	if expected is None:
+		ok = not calls
+	else:
+		ok = any(
+			all(
+				(call["args"].get(key) == value) if key == "specialty" else (bool(call["args"].get(key)) == value)
+				for key, value in expected.items()
+			)
+			for call in calls
+		)
+	return {"facility_ok": ok, "facility_calls": [call["args"] for call in calls]}
 
 
 def profile_checks(item: dict, answer: str) -> dict:
@@ -289,11 +311,22 @@ def print_agent_summary(rows: list[dict]) -> None:
 			print(f"  ! {row['id']:<12} guardrail che liều: {row['dose_redactions']}")
 
 
+def print_facility_summary(rows: list[dict]) -> None:
+	rows = [r for r in rows if "facility_ok" in r]
+	if not rows:
+		return
+	print(f"\n== Gợi ý nơi khám: {sum(r['facility_ok'] for r in rows)}/{len(rows)} câu gọi find_healthcare_facility đúng")
+	for row in rows:
+		if not row["facility_ok"]:
+			print(f"  ! {row['id']:<12} lời gọi: {row['facility_calls']}")
+
+
 def print_profile_summary(rows: list[dict]) -> None:
 	rows = [r for r in rows if "profile_ok" in r]
 	if not rows:
 		return
-	print(f"\n== Hồ sơ người hỏi: {sum(r['profile_ok'] for r in rows)}/{len(rows)} câu đạt must_mention / must_not_mention")
+	# Dùng cho câu hồ sơ (docs/HEALTH_PROFILE.md) và câu gợi ý nơi khám (cấm số điện thoại tự bịa).
+	print(f"\n== must_mention / must_not_mention: {sum(r['profile_ok'] for r in rows)}/{len(rows)} câu đạt")
 	for row in rows:
 		if not row["profile_ok"]:
 			print(f"  ! {row['id']:<12} thiếu {row['profile_missing']} | không được có {row['profile_unwanted']}")
@@ -363,6 +396,7 @@ def main() -> None:
 	print_latency(scored)
 	print_agent_summary(scored)
 	print_profile_summary(scored)
+	print_facility_summary(scored)
 
 	print("\n== Cần xem lại")
 	for row in scored:

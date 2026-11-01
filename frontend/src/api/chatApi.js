@@ -175,16 +175,18 @@ export async function getProfileOptions() {
  * @param {object} handlers
  * @param {(conversation: {id: string, title: string}) => void} [handlers.onConversation]
  *   Sự kiện đầu tiên: id + tiêu đề hội thoại (id mới nếu vừa tạo).
- * @param {(stage: "thinking"|"rewriting"|"retrieving"|"reading"|"generating", data: object) => void} [handlers.onStatus]
+ * @param {(stage: "thinking"|"rewriting"|"retrieving"|"reading"|"finding_facility"|"generating", data: object) => void} [handlers.onStatus]
  *   `data` là cả sự kiện; với agent, `retrieving` kèm `query` đang tìm.
  * @param {(sources: object[]) => void} [handlers.onSources]
+ * @param {(facilities: object[]) => void} [handlers.onFacilities]
+ *   Thẻ cơ sở y tế agent gợi ý (danh sách đầy đủ tới lúc đó).
  * @param {(text: string) => void} [handlers.onDelta] - Từng đoạn câu trả lời mới.
  * @returns {Promise<void>} Resolve khi nhận sự kiện `done`; reject khi lỗi.
  */
 export async function streamChatMessage(
   message,
   conversationId,
-  { onConversation, onStatus, onSources, onDelta } = {}
+  { onConversation, onStatus, onSources, onFacilities, onDelta } = {}
 ) {
   const response = await apiFetch("/api/chat/stream", {
     method: "POST",
@@ -207,6 +209,7 @@ export async function streamChatMessage(
       if (event === "conversation") onConversation?.(data);
       else if (event === "status") onStatus?.(data.stage, data);
       else if (event === "sources") onSources?.(data.sources);
+      else if (event === "facilities") onFacilities?.(data.facilities);
       else if (event === "delta") onDelta?.(data.text);
       else if (event === "error") throw new Error(data.detail);
       else if (event === "done") return;

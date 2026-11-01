@@ -262,6 +262,7 @@ function App() {
         onStatus: (stage, data) =>
           updateReply((m) => ({ ...m, status: stage, statusQuery: data.query })),
         onSources: (sources) => updateReply((m) => ({ ...m, sources })),
+        onFacilities: (facilities) => updateReply((m) => ({ ...m, facilities })),
         onDelta: (delta) => updateReply((m) => ({ ...m, content: m.content + delta })),
       });
       updateReply(stripPending);
@@ -272,7 +273,7 @@ function App() {
         return m.content
           ? // Đã có một phần câu trả lời: giữ lại, ghi chú bị ngắt.
             { ...m, content: `${m.content}\n\n*(Câu trả lời bị gián đoạn: ${error.message})*` }
-          : { ...m, content: `Đã có lỗi xảy ra: ${error.message}`, isError: true, sources: [] };
+          : { ...m, content: `Đã có lỗi xảy ra: ${error.message}`, isError: true, sources: [], facilities: [] };
       });
     } finally {
       setIsSending(false);
@@ -339,6 +340,7 @@ function App() {
                 content={message.content}
                 isError={message.isError}
                 sources={message.sources}
+                facilities={message.facilities}
                 pending={message.pending}
                 status={message.status}
                 statusQuery={message.statusQuery}
