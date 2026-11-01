@@ -15,10 +15,11 @@ frontend/
     ├── App.css                    # Style cho toàn bộ layout (header/sidebar/chat/đăng nhập/footer)
     ├── index.css                  # CSS reset tối giản, áp cho toàn trang
     ├── api/
-    │   └── chatApi.js             # Mọi lời gọi backend: token, đăng nhập, hội thoại, chat stream (SSE)
+    │   └── chatApi.js             # Mọi lời gọi backend: token, đăng nhập, hội thoại, hồ sơ, chat stream (SSE)
     ├── components/
     │   ├── AuthScreen.jsx         # Màn đăng nhập / đăng ký
-    │   ├── Sidebar.jsx            # Danh sách hội thoại, tạo mới / đổi tên / xoá, tên user + đăng xuất
+    │   ├── Sidebar.jsx            # Danh sách hội thoại, tạo mới / đổi tên / xoá, hồ sơ, tên user + đăng xuất
+    │   ├── ProfileModal.jsx       # Form hồ sơ sức khỏe: năm sinh, bệnh nền, dị ứng thuốc, mang thai
     │   ├── MessageBubble.jsx      # 1 bong bóng chat; câu trả lời của bot render markdown (react-markdown)
     │   └── ChatInput.jsx          # Ô nhập tin nhắn + nút Gửi
     └── utils/
@@ -29,7 +30,7 @@ frontend/
 
 ```
 main.jsx
-  └── App.jsx            (state: user, conversations[], activeId, messagesById{}, isSending...)
+  └── App.jsx            (state: user, conversations[], activeId, messagesById{}, isSending, profile...)
         ├── <header>
         ├── user === undefined → "Đang tải…" (đang hỏi /api/auth/me), hoặc lỗi kết nối + nút Thử lại
         ├── user === null      → <AuthScreen>   đăng nhập / đăng ký → onLoggedIn(user)
@@ -37,7 +38,9 @@ main.jsx
         │     ├── <Sidebar>       hội thoại + user; callback chọn / tạo / đổi tên / xoá / đăng xuất
         │     ├── <main class="chat-window">
         │     │     └── <MessageBubble> × N   (tin nhắn của hội thoại đang mở, hoặc lời chào)
+        │     ├── <button class="profile-bar">  tóm tắt hồ sơ đang dùng, bấm để sửa
         │     └── <ChatInput>     onSend(text) → App.handleSend
+        ├── <ProfileModal>       khi isProfileOpen: lưu / xoá hồ sơ
         └── <footer>             disclaimer y tế cố định
 ```
 
@@ -90,21 +93,26 @@ Giữ toàn bộ **state chính**:
 - `activeId`: hội thoại đang mở. `null` là cuộc mới chưa gửi câu nào.
 - `messagesById`: cache tin nhắn theo id hội thoại (key `"draft"` cho cuộc mới). Mở một hội thoại lần đầu thì tải từ `GET /api/conversations/{id}/messages`, các lần sau dùng cache.
 - `isSending`: đang chờ câu trả lời. Khi đó khóa ô nhập, nút tạo mới, đổi tên, xóa, đăng xuất. Vẫn cho chọn hội thoại khác để xem.
+- `profile`, `isProfileOpen`: hồ sơ sức khỏe (`GET /api/profile`, tải khi đăng nhập) và trạng thái form. Backend tự đọc hồ sơ ở mỗi câu hỏi; state này chỉ để hiện dòng tóm tắt và điền sẵn form.
 
-Các hàm chính: `handleSend`, `handleSelect`, `handleNew`, `handleRename` (dùng `window.prompt`), `handleDelete` (hỏi xác nhận), `handleLoggedIn`, `handleLogout`.
+Các hàm chính: `handleSend`, `handleSelect`, `handleNew`, `handleRename` (dùng `window.prompt`), `handleDelete` (hỏi xác nhận), `handleLoggedIn`, `handleLogout`, `handleSaveProfile`, `handleDeleteProfile`.
 
 ### `src/api/chatApi.js`
 Nơi **duy nhất** gọi ra backend. Đọc `API_BASE_URL` từ `VITE_API_BASE_URL` (mặc định `http://localhost:8000`).
 - `apiFetch()`: tự gắn `Authorization: Bearer <token>`. Lỗi HTTP thì ném `Error` với `detail` của backend; lỗi 422 được dịch sang tiếng Việt. Gặp 401 khi có token thì xóa token và phát `auth:logout`. Không tới được máy chủ thì báo "Không kết nối được máy chủ".
 - Auth: `register`, `login` (lưu token), `fetchMe`, `getToken`, `clearToken`.
 - Hội thoại: `listConversations`, `listMessages`, `renameConversation`, `deleteConversation`.
+- Hồ sơ: `getProfile`, `saveProfile`, `deleteProfile`, `getProfileOptions` (gợi ý bệnh nền).
 - `streamChatMessage(message, conversationId, handlers)`: dùng `fetch` + `ReadableStream` thay cho `EventSource`, vì `EventSource` chỉ gửi được GET và không gắn được header token.
 
 ### `src/components/AuthScreen.jsx`
 Form đăng nhập và đăng ký (chuyển qua lại bằng nút dưới form). Hiện lỗi từ backend (sai mật khẩu, email đã đăng ký…) và thông báo "phiên đã hết hạn" nếu có.
 
 ### `src/components/Sidebar.jsx`
-Component chỉ nhận props và gọi callback. Hiện danh sách hội thoại; nút ✎ (đổi tên) và × (xóa) chỉ hiện khi rê chuột vào hoặc ở mục đang mở. Cuối sidebar hiện tên, email và nút Đăng xuất.
+Component chỉ nhận props và gọi callback. Hiện danh sách hội thoại; nút ✎ (đổi tên) và × (xóa) chỉ hiện khi rê chuột vào hoặc ở mục đang mở. Cuối sidebar có nút "Hồ sơ sức khỏe", rồi tên, email và nút Đăng xuất.
+
+### `src/components/ProfileModal.jsx`
+Form hồ sơ sức khỏe ([../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md)). Bệnh nền: tick các nhóm bệnh có trong dữ liệu (`GET /api/profile/options`) và gõ thêm; dị ứng thuốc: gõ tên, cách nhau bởi dấu phẩy; năm sinh; đang mang thai; bật / tắt "dùng hồ sơ khi trả lời". Nút Xóa hồ sơ chỉ hiện khi đã lưu. Esc hoặc bấm ra ngoài để đóng.
 
 ### `src/components/MessageBubble.jsx`, `ChatInput.jsx`
 Không đổi: bong bóng chat (markdown, nguồn trích dẫn, trạng thái chờ) và ô nhập.

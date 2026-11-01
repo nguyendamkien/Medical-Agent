@@ -7,7 +7,8 @@ Một lượt chat:
 1. get_current_user kiểm tra token (sai → 401).
 2. _prepare_conversation: chưa có conversation_id → tạo hội thoại mới;
    có → kiểm tra hội thoại thuộc user (không → 404) và đọc lịch sử từ DB.
-3. Gọi RAG / agent như trước (service.ask / ask_stream) với lịch sử vừa đọc.
+   load_chat_profile: đọc hồ sơ sức khoẻ (nếu có và người dùng bật "dùng trong chat").
+3. Gọi RAG / agent (service.ask / ask_stream) với lịch sử và hồ sơ vừa đọc.
 4. _save_turn: trả lời xong mới lưu cả câu hỏi + câu trả lời (lỗi giữa chừng → không lưu gì).
 """
 
@@ -25,6 +26,7 @@ from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Conversation, Message, User
 from app.routers.conversations import get_owned_conversation
+from app.routers.profile import load_chat_profile
 from app.schemas import ChatMessage, ChatRequest, ChatResponse
 from app.security import get_current_user
 from app.services.agent_service import AgentService, get_agent_service
@@ -98,8 +100,9 @@ def chat(
 ) -> ChatResponse:
     service = _get_service()
     conversation_id, _, history = _prepare_conversation(request, user, db)
+    profile = load_chat_profile(db, user)
     try:
-        reply, sources = service.ask(request.message, history)
+        reply, sources = service.ask(request.message, history, profile)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
@@ -124,13 +127,15 @@ def chat_stream(
     service = _get_service()
     # Chạy TRƯỚC khi mở stream: token sai / hội thoại không thuộc user → 401 / 404 bình thường.
     conversation_id, title, history = _prepare_conversation(request, user, db)
+    # Đọc trước khi mở stream: session `db` đã đóng khi stream chạy (xem _save_turn).
+    profile = load_chat_profile(db, user)
 
     def events() -> Iterator[str]:
         yield _sse("conversation", {"id": str(conversation_id), "title": title})
         reply_parts: list[str] = []
         sources: list[dict] = []
         try:
-            for event, data in service.ask_stream(request.message, history):
+            for event, data in service.ask_stream(request.message, history, profile):
                 if event == "delta":
                     reply_parts.append(data["text"])  # chữ đã qua guardrail liều thuốc
                 elif event == "sources":

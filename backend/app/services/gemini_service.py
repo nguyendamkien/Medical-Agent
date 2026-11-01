@@ -139,15 +139,26 @@ class GeminiService:
     def _start_chat(self, history: list[ChatMessage]):
         return self._model.start_chat(history=to_contents(history))
 
-    def agent_turn(self, contents: list, tools: dict, allow_tools: bool = True) -> Iterator:
+    def agent_turn(
+        self, contents: list, tools: dict, allow_tools: bool = True, extra_instruction: str = ""
+    ) -> Iterator:
         """Một vòng của agent: gửi `contents` (lịch sử + câu hỏi + các lời gọi / kết quả tool đã
         có), trả từng Part ngay khi Gemini sinh ra — Part có `function_call.name` là lời gọi tool,
         Part có `text` là câu trả lời. Vòng lặp nằm ở AgentService.
 
         `allow_tools=False`: vẫn khai báo tool (lịch sử có lời gọi tool) nhưng cấm gọi, buộc model
-        trả lời bằng những gì đã có."""
+        trả lời bằng những gì đã có.
+
+        `extra_instruction`: thêm vào cuối AGENT_INSTRUCTION cho riêng request này (khối hồ sơ người
+        hỏi, app/rag/profile.py). Tạo GenerativeModel chỉ là tạo object, không gọi mạng."""
+        model = self._agent
+        if extra_instruction:
+            model = genai.GenerativeModel(
+                model_name=get_settings().gemini_model,
+                system_instruction=f"{AGENT_INSTRUCTION}\n{extra_instruction}",
+            )
         tool_config = {"function_calling_config": {"mode": "AUTO" if allow_tools else "NONE"}}
-        response = self._agent.generate_content(
+        response = model.generate_content(
             contents, tools=[tools], tool_config=tool_config, stream=True,
             request_options=REQUEST_OPTIONS,
         )

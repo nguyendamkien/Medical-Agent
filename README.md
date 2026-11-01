@@ -35,6 +35,7 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
 - [docs/AGENTIC_RAG.md](docs/AGENTIC_RAG.md): agent tự gọi tool tìm tài liệu (bật mặc định), guardrail liều thuốc.
 - [docs/RAG_EVAL.md](docs/RAG_EVAL.md): bộ golden test, script đo retrieval và chấm end-to-end theo tiêu chí RAG, kết quả đo.
 - [docs/AUTH_CHAT_HISTORY.md](docs/AUTH_CHAT_HISTORY.md): đăng ký / đăng nhập (JWT) và lưu lịch sử chat bằng PostgreSQL. Ghi lại những gì đã làm, các bước cài đặt, thao tác thường dùng và cách xử lý lỗi.
+- [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md): hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) đưa vào prompt để agent tìm đúng tài liệu và cảnh báo dị ứng.
 - [backend/STRUCTURE.md](backend/STRUCTURE.md): cấu trúc code backend và luồng xử lý một request.
 - [frontend/STRUCTURE.md](frontend/STRUCTURE.md): cấu trúc code frontend, luồng đăng nhập và gửi tin nhắn.
 - [data-collection/README.md](data-collection/README.md): crawler, nguồn dữ liệu, bản quyền.
@@ -268,10 +269,10 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 │   │   │   └── prompt.py         # Ghép context + câu hỏi thành prompt
 │   │   └── scripts/ingest.py     # Tạo vector index
 │   └── eval/
-│       ├── golden_set.jsonl      # 70 câu hỏi chuẩn
+│       ├── golden_set.jsonl      # 88 câu hỏi chuẩn
 │       ├── eval_retrieval.py     # Đo retrieval
 │       └── eval_rag.py           # Chấm end-to-end bằng LLM giám khảo
-├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md
+├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md
 ├── frontend/
 │   └── src/
 │       ├── App.jsx               # Đăng nhập, danh sách hội thoại, gửi tin nhắn

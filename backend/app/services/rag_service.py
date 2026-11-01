@@ -2,6 +2,7 @@ import logging
 from collections.abc import Iterator
 
 from app.config import get_settings
+from app.rag.profile import UserProfile
 from app.rag.prompt import build_prompt, source_key
 from app.rag.retriever import Retriever
 from app.schemas import ChatMessage, Source
@@ -27,23 +28,30 @@ class RagService:
         self._gemini = gemini
         self._retriever = retriever
 
-    def ask(self, message: str, history: list[ChatMessage]) -> tuple[str, list[Source]]:
-        reply, sources, _, _ = self.ask_with_context(message, history)
+    def ask(
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
+    ) -> tuple[str, list[Source]]:
+        reply, sources, _, _ = self.ask_with_context(message, history, profile)
         return reply, sources
 
     def ask_with_context(
-        self, message: str, history: list[ChatMessage]
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
     ) -> tuple[str, list[Source], list[dict], str]:
-        """Như ask(), trả thêm các chunk đã retrieve và câu dùng để retrieve (cho đánh giá RAG)."""
+        """Như ask(), trả thêm các chunk đã retrieve và câu dùng để retrieve (cho đánh giá RAG).
+
+        `profile` chỉ vào prompt trả lời, KHÔNG dùng để tìm kiếm (pipeline này không để model
+        tự viết truy vấn), nên "tôi ăn hải sản được không" vẫn tìm chung chung — agent làm tốt hơn."""
         history = trim_history(history, get_settings().history_max_turns)
         search_query = self.build_search_query(message, history)
         results = self._retriever.search(search_query)
         # Gemini vẫn nhận câu hỏi gốc + lịch sử; câu viết lại chỉ dùng để tìm tài liệu.
-        prompt = build_prompt(message, results)
+        prompt = build_prompt(message, results, profile)
         reply = self._gemini.ask(prompt, history)
         return reply, collect_sources(results), results, search_query
 
-    def ask_stream(self, message: str, history: list[ChatMessage]) -> Iterator[tuple[str, dict]]:
+    def ask_stream(
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
+    ) -> Iterator[tuple[str, dict]]:
         """Như ask(), nhưng phát từng sự kiện `(tên, dữ liệu)` để frontend hiển thị dần:
 
             ("status",  {"stage": "rewriting" | "retrieving" | "generating"})
@@ -60,7 +68,7 @@ class RagService:
         yield "sources", {"sources": [source.model_dump() for source in collect_sources(results)]}
 
         yield "status", {"stage": "generating"}
-        prompt = build_prompt(message, results)
+        prompt = build_prompt(message, results, profile)
         for text in self._gemini.ask_stream(prompt, history):
             yield "delta", {"text": text}
 

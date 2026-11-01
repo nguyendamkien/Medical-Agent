@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ChatMessage(BaseModel):
@@ -106,3 +106,60 @@ class MessageOut(BaseModel):
     content: str
     sources: list[Source] | None = None
     created_at: datetime
+
+
+# ---------- Hồ sơ sức khoẻ (routers/profile.py) ----------
+
+MAX_PROFILE_ITEMS = 20
+MAX_PROFILE_ITEM_CHARS = 100
+
+
+def _clean_items(values: list[str]) -> list[str]:
+    """Bỏ khoảng trắng thừa, mục rỗng, mục trùng (không phân biệt hoa thường); giữ thứ tự."""
+    seen: set[str] = set()
+    items = []
+    for value in values:
+        item = " ".join(str(value).split())
+        if item and item.casefold() not in seen:
+            seen.add(item.casefold())
+            items.append(item)
+    return items
+
+
+class HealthProfileIn(BaseModel):
+    """Body của PUT /api/profile. Gửi đủ mọi trường (ghi đè cả hồ sơ)."""
+
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+    pregnant: bool = False
+    conditions: list[str] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+    allergies: list[str] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+    use_in_chat: bool = True
+
+    @field_validator("conditions", "allergies")
+    @classmethod
+    def _clean(cls, values: list[str]) -> list[str]:
+        items = _clean_items(values)
+        if any(len(item) > MAX_PROFILE_ITEM_CHARS for item in items):
+            raise ValueError(f"Mỗi mục tối đa {MAX_PROFILE_ITEM_CHARS} ký tự.")
+        return items
+
+    @field_validator("birth_year")
+    @classmethod
+    def _not_future(cls, value: int | None) -> int | None:
+        if value is not None and value > date.today().year:
+            raise ValueError("Năm sinh không được ở tương lai.")
+        return value
+
+
+class HealthProfileOut(HealthProfileIn):
+    """Hồ sơ trả về. `updated_at` = None: người dùng chưa lưu hồ sơ lần nào."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    updated_at: datetime | None = None
+
+
+class ProfileOptions(BaseModel):
+    """Gợi ý cho form hồ sơ: các nhóm bệnh có trong dữ liệu của chatbot."""
+
+    conditions: list[str]

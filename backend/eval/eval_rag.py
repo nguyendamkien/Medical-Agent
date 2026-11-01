@@ -16,6 +16,9 @@ giám khảo là mọi chunk agent đã lấy trong request (kể cả nội dun
 có thêm vết chạy và chỉ số agent: số lần tìm / đọc bài, lời gọi lỗi, chạm giới hạn, trả lời không
 tìm, tìm khi không cần.
 
+Câu có trường `profile` (loại "profile", docs/HEALTH_PROFILE.md) chạy kèm hồ sơ người hỏi; câu
+có must_mention / must_not_mention được chấm thêm "profile_ok". Chỉ chạy nhóm này: --types profile.
+
 Đo thời gian thì chạy --workers 1: chạy song song làm các luồng tranh CPU với reranker.
 Kết quả từng câu được ghi dần vào <out>.partial.jsonl; --resume bỏ qua các câu đã có ở đó (dùng
 khi lần chạy trước bị gián đoạn, vd mất mạng).
@@ -23,6 +26,7 @@ khi lần chạy trước bị gián đoạn, vd mất mạng).
 
 import argparse
 import json
+import re
 import statistics
 import threading
 import time
@@ -32,6 +36,7 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.rag.embeddings import _get_client
+from app.rag.profile import UserProfile
 from app.schemas import ChatMessage
 from app.services.agent_service import get_agent_service
 from app.services.rag_service import get_rag_service
@@ -47,6 +52,9 @@ JUDGE_PROMPT = """Bạn là giám khảo đánh giá hệ thống RAG hỏi đá
 
 # LỊCH SỬ HỘI THOẠI (nếu có)
 {history}
+
+# HỒ SƠ NGƯỜI HỎI (người dùng tự khai, nếu có)
+{profile}
 
 # CONTEXT hệ thống đã truy xuất (đánh số)
 {contexts}
@@ -67,7 +75,7 @@ Trả về JSON đúng schema sau, không thêm gì khác:
 }}
 
 Lưu ý:
-- "claims": chỉ liệt kê khẳng định mang tính thông tin y khoa (triệu chứng, con số, thuốc, nguyên nhân...). BỎ QUA: lời khuyên chung ("nên đi khám bác sĩ", "thông tin chỉ tham khảo", "gọi 115"), câu nói về việc thiếu dữ liệu ("không tìm thấy thông tin về X"), và lời cảnh báo chung rằng triệu chứng là nguy hiểm/cần cấp cứu. Nếu không còn claim nào thì trả về mảng rỗng.
+- "claims": chỉ liệt kê khẳng định mang tính thông tin y khoa (triệu chứng, con số, thuốc, nguyên nhân...). BỎ QUA: lời khuyên chung ("nên đi khám bác sĩ", "thông tin chỉ tham khảo", "gọi 115"), câu nói về việc thiếu dữ liệu ("không tìm thấy thông tin về X"), lời cảnh báo chung rằng triệu chứng là nguy hiểm/cần cấp cứu, và câu nhắc lại HỒ SƠ NGƯỜI HỎI ("bạn có ghi bệnh gout", "bạn đã ghi dị ứng aspirin, cần hỏi bác sĩ trước khi dùng"). Nếu không còn claim nào thì trả về mảng rỗng.
 - Một claim được hỗ trợ khi CONTEXT nêu rõ hoặc suy ra trực tiếp được; kiến thức đúng nhưng không có trong CONTEXT vẫn là false.
 - Nếu không có key fact thì "context_recall" là mảng rỗng.
 - Độ dài các mảng phải khớp đúng số context / số key fact."""
@@ -92,8 +100,10 @@ def judge(item: dict, answer: str, results: list[dict], model: str) -> dict:
 	) or "(không có context)"
 	history = "\n".join(f"{m['role']}: {m['content']}" for m in item["history"]) or "(không có)"
 	key_facts = "\n".join(f"{i}. {fact}" for i, fact in enumerate(item["key_facts"], start=1)) or "(không có)"
+	profile = json.dumps(item["profile"], ensure_ascii=False) if item.get("profile") else "(không có)"
 	prompt = JUDGE_PROMPT.format(
-		question=item["question"], history=history, contexts=contexts, answer=answer, key_facts=key_facts
+		question=item["question"], history=history, profile=profile, contexts=contexts, answer=answer,
+		key_facts=key_facts,
 	)
 	response = _get_client().chat.completions.create(
 		model=model,
@@ -175,19 +185,33 @@ def agent_metrics(item: dict, result: dict) -> dict:
 	}
 
 
+def profile_checks(item: dict, answer: str) -> dict:
+	"""Câu có hồ sơ (docs/HEALTH_PROFILE.md): câu trả lời phải / không được nhắc các cụm trong
+	must_mention / must_not_mention (regex, không phân biệt hoa thường). Vd hồ sơ dị ứng aspirin +
+	tài liệu nhắc aspirin → phải có "dị ứng"; hỏi cho mẹ → không được nhắc bệnh nền của người hỏi."""
+	if "must_mention" not in item and "must_not_mention" not in item:
+		return {}
+	missing = [p for p in item.get("must_mention", []) if not re.search(p, answer, re.IGNORECASE)]
+	unwanted = [p for p in item.get("must_not_mention", []) if re.search(p, answer, re.IGNORECASE)]
+	return {"profile_ok": not missing and not unwanted, "profile_missing": missing, "profile_unwanted": unwanted}
+
+
 def run_item(item: dict, judge_model: str, use_agent: bool) -> dict:
 	history = [ChatMessage(**m) for m in item["history"]]
+	profile = UserProfile.from_dict(item.get("profile"))
 	base = {"id": item["id"], "type": item["type"], "question": item["question"]}
 	started = time.perf_counter()
 	try:
 		if use_agent:
-			result = with_retry(get_agent_service().ask_with_trace, item["question"], history)
+			result = with_retry(get_agent_service().ask_with_trace, item["question"], history, profile)
 			answer, results = result["reply"], result["results"]
 			search_query = " | ".join(
 				call["args"].get("query", "") for call in result["trace"] if call["tool"] == "search_medical_docs"
 			)
 		else:
-			answer, _, results, search_query = with_retry(get_rag_service().ask_with_context, item["question"], history)
+			answer, _, results, search_query = with_retry(
+				get_rag_service().ask_with_context, item["question"], history, profile
+			)
 	except Exception as exc:
 		return {**base, "error": f"generation: {exc}"}
 	latency = time.perf_counter() - started
@@ -199,6 +223,7 @@ def run_item(item: dict, judge_model: str, use_agent: bool) -> dict:
 	if search_query != item["question"]:
 		row["search_query"] = search_query  # câu nối tiếp đã viết lại / các truy vấn agent đã tìm
 	row["latency_s"] = round(latency, 2)
+	row.update(profile_checks(item, answer))
 	if use_agent:
 		row.update(agent_metrics(item, result))
 	return row
@@ -264,6 +289,16 @@ def print_agent_summary(rows: list[dict]) -> None:
 			print(f"  ! {row['id']:<12} guardrail che liều: {row['dose_redactions']}")
 
 
+def print_profile_summary(rows: list[dict]) -> None:
+	rows = [r for r in rows if "profile_ok" in r]
+	if not rows:
+		return
+	print(f"\n== Hồ sơ người hỏi: {sum(r['profile_ok'] for r in rows)}/{len(rows)} câu đạt must_mention / must_not_mention")
+	for row in rows:
+		if not row["profile_ok"]:
+			print(f"  ! {row['id']:<12} thiếu {row['profile_missing']} | không được có {row['profile_unwanted']}")
+
+
 def main() -> None:
 	parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
@@ -327,6 +362,7 @@ def main() -> None:
 	print(f"\n== Thời gian / câu (sinh câu trả lời, không tính giám khảo; workers={args.workers})")
 	print_latency(scored)
 	print_agent_summary(scored)
+	print_profile_summary(scored)
 
 	print("\n== Cần xem lại")
 	for row in scored:

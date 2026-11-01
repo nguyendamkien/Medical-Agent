@@ -1,6 +1,6 @@
 # Cấu trúc Backend (FastAPI + RAG)
 
-Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
+Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). Hồ sơ sức khỏe: xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
 
 ## Cây thư mục
 
@@ -17,11 +17,12 @@ backend/
 │   ├── config.py                  # Đọc cấu hình từ .env (Settings)
 │   ├── schemas.py                 # Định nghĩa request/response body (Pydantic models)
 │   ├── db.py                      # Kết nối PostgreSQL: engine, SessionLocal, Base, get_db
-│   ├── models.py                  # Bảng users, conversations, messages (SQLAlchemy)
+│   ├── models.py                  # Bảng users, conversations, messages, health_profiles (SQLAlchemy)
 │   ├── security.py                # Băm mật khẩu argon2, tạo / kiểm tra JWT, get_current_user
 │   ├── routers/
 │   │   ├── auth.py                # POST /api/auth/register, /login, GET /api/auth/me
 │   │   ├── conversations.py       # GET/PATCH/DELETE /api/conversations… (sidebar)
+│   │   ├── profile.py             # GET/PUT/DELETE /api/profile, /api/profile/options; load_chat_profile
 │   │   └── chat.py                # POST /api/chat (trả một lần) và POST /api/chat/stream (SSE), lưu lịch sử
 │   ├── services/
 │   │   ├── rag_service.py         # Điều phối một câu hỏi: retrieve → prompt → Gemini → nguồn
@@ -37,12 +38,13 @@ backend/
 │   │   ├── reranker.py            # Cross-encoder bge-reranker-v2-m3 (mặc định bật)
 │   │   ├── prompt.py              # Ghép các chunk + câu hỏi thành prompt
 │   │   ├── tools.py               # Tool của agent: search_medical_docs, get_article
+│   │   ├── profile.py             # Hồ sơ sức khỏe → khối prompt; quét thuốc dị ứng trong tài liệu
 │   │   └── guardrail.py           # Quét câu trả lời, che liều thuốc trước khi gửi (kể cả khi stream)
 │   ├── scripts/
 │   │   └── ingest.py              # Build vector index từ file dữ liệu
 │   └── storage/chroma/            # Dữ liệu Chroma trên đĩa (không nằm trong git)
 └── eval/
-    ├── golden_set.jsonl           # 70 câu hỏi chuẩn để đánh giá
+    ├── golden_set.jsonl           # 100 câu hỏi chuẩn để đánh giá (12 câu kèm hồ sơ người hỏi)
     ├── eval_retrieval.py          # Đo retrieval (hit@k, MRR…)
     └── eval_rag.py                # Chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo
 ```
@@ -78,7 +80,8 @@ routers/chat.py            — validate body theo ChatRequest
     │  _prepare_conversation: chưa có conversation_id → tạo hội thoại mới;
     │                         có → get_owned_conversation (không phải của user → 404)
     │                         + đọc HISTORY_MAX_TURNS lượt gần nhất từ bảng messages
-    │  gọi service.ask(message, history)   (AgentService hoặc RagService)
+    │  load_chat_profile: đọc hồ sơ sức khỏe (bảng health_profiles), không có / tắt → None
+    │  gọi service.ask(message, history, profile)   (AgentService hoặc RagService)
     ▼
 services/rag_service.py
     │
@@ -158,6 +161,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `User` (`users`): `id` UUID, `email` (unique), `password_hash`, `display_name`, `created_at`.
 - `Conversation` (`conversations`): `id` UUID, `user_id` → users (`ON DELETE CASCADE`), `title`, `created_at`, `updated_at`. Có index `(user_id, updated_at)` để tải sidebar.
 - `Message` (`messages`): `id` BIGSERIAL (sắp theo id = đúng thứ tự gửi), `conversation_id` → conversations (`ON DELETE CASCADE`), `role` (`user` / `model`), `content` TEXT, `sources` JSONB (chỉ ở tin của bot), `created_at`. Có index `(conversation_id, id)`.
+- `HealthProfile` (`health_profiles`): `user_id` vừa là khoá chính vừa → users (`ON DELETE CASCADE`), nên mỗi user tối đa một hồ sơ. `birth_year`, `pregnant`, `conditions` / `allergies` (JSONB list), `use_in_chat`, `updated_at`. Xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md).
 - Sửa file này thì phải tạo migration mới (xem luồng 4 ở trên).
 
 ### `app/security.py`
@@ -175,13 +179,19 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `GET /api/conversations` (mới nhất trước), `GET /{id}/messages` (theo `Message.id`), `PATCH /{id}` (đổi tên), `DELETE /{id}` (204, tin nhắn bị xóa theo).
 - Không có API tạo hội thoại: `chat.py` tạo khi có câu hỏi đầu tiên.
 
+### `app/routers/profile.py`
+- `GET /api/profile` (chưa có → hồ sơ rỗng, `updated_at: null`), `PUT /api/profile` (tạo hoặc ghi đè cả hồ sơ), `DELETE /api/profile` (204).
+- `GET /api/profile/options`: gợi ý bệnh nền = các `disease_group` trong file `DATA_PATH`, đọc một lần (`lru_cache`). Không lấy từ `Retriever` vì tạo Retriever phải nạp Chroma, BM25 và reranker.
+- `load_chat_profile(db, user)`: `chat.py` gọi để lấy `UserProfile` đưa vào prompt; trả `None` khi chưa có hồ sơ, hồ sơ rỗng, hoặc `use_in_chat = false`.
+
 ### `app/routers/chat.py`
 - `APIRouter(prefix="/api")` — mọi route trong file có tiền tố `/api`.
 - Cả hai endpoint đều cần `get_current_user`.
 - `_get_service()`: `AGENT_ENABLED=true` (mặc định) → `get_agent_service()`, `false` → `get_rag_service()`. Hai service có cùng `ask` / `ask_stream`.
 - `_prepare_conversation()`: tạo hội thoại mới (tiêu đề = 32 ký tự đầu của câu hỏi, `_derive_title`), hoặc kiểm tra quyền rồi đọc `2 × HISTORY_MAX_TURNS` tin nhắn gần nhất làm `history`. Chạy **trước** khi mở stream, nên lỗi 401/404 vẫn trả bằng HTTP status.
 - `_save_turn()`: lưu câu hỏi và câu trả lời trong **một** transaction, chỉ khi đã trả lời xong. Nhờ vậy lịch sử không bao giờ có câu hỏi thiếu câu trả lời. Hàm này dùng `SessionLocal()` riêng, vì với `StreamingResponse`, FastAPI 0.115 đóng session của `Depends(get_db)` trước khi stream chạy xong.
-- `POST /api/chat`: gọi `service.ask(message, history)`, lưu lượt chat, rồi bọc kết quả vào `ChatResponse`. Frontend không dùng endpoint này; giữ lại để gọi API trực tiếp.
+- Sau `_prepare_conversation()`, `load_chat_profile()` đọc hồ sơ sức khỏe (cũng trước khi mở stream, vì session `db` đóng sớm).
+- `POST /api/chat`: gọi `service.ask(message, history, profile)`, lưu lượt chat, rồi bọc kết quả vào `ChatResponse`. Frontend không dùng endpoint này; giữ lại để gọi API trực tiếp.
 - `POST /api/chat/stream` (frontend dùng): cùng body, trả `text/event-stream` từ `service.ask_stream`. Thứ tự sự kiện:
   - `conversation` `{id, title}`: luôn đến đầu tiên, để frontend biết id của hội thoại vừa tạo
   - `status` `{stage}` — `rewriting` (chỉ khi có history) → `retrieving` → `generating`. Với agent: `thinking` → mỗi lần gọi tool một `retrieving` `{stage, query}` hoặc `reading` `{stage, document_id}` → `generating`
@@ -253,7 +263,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `build_context(results)`: mỗi chunk thành khối `[Nguồn i] tiêu đề | Mục: …` kèm nội dung và URL. `i` đánh theo **bài**, không theo chunk (chunk cùng bài chung số), cùng thứ tự với `sources` trả về frontend — nên "[Nguồn i]" trong câu trả lời khớp với nguồn thứ i hiển thị; không có chunk thì ghi "Không tìm thấy tài liệu phù hợp…".
 - `build_rag_prompt(question, context)`: quy tắc chỉ trả lời dựa trên context, không bịa, không kê đơn, không nêu liều thuốc (hàm lượng, số lần/ngày, thời gian dùng) kể cả khi context có ghi, gặp dấu hiệu cấp cứu thì khuyên gọi 115.
 - `build_no_context_prompt(question)`: prompt khi retrieve không ra chunk nào — tối đa 3 câu, nói chưa có thông tin (hoặc từ chối câu ngoài lĩnh vực sức khỏe, đáp lời chào), khuyên đi khám, cấm nêu triệu chứng, con số, thuốc, điều trị, tiên lượng. Câu cấp cứu có nhánh riêng: câu đầu khuyên gọi 115, không nói "chưa có thông tin trong dữ liệu".
-- `build_prompt(question, results)`: chọn một trong hai prompt trên theo `results`; `RagService` gọi hàm này.
+- `build_prompt(question, results, profile?)`: chọn một trong hai prompt trên theo `results`; `RagService` gọi hàm này. Có hồ sơ và có tài liệu thì thêm khối "THÔNG TIN NGƯỜI HỎI" trước CONTEXT và dòng nhắc dị ứng sau CONTEXT; không có tài liệu thì không đưa hồ sơ.
 - `format_chunk(result, index, with_document_id)`: một khối chunk; tool tìm kiếm của agent dùng bản kèm `document_id`.
 
 ### `app/rag/guardrail.py`
@@ -264,6 +274,12 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 ### `app/rag/tools.py`
 - `tool_declarations(disease_groups)`: khai báo `search_medical_docs(query, disease_group?)` và `get_article(document_id, section?)` cho Gemini; `enum` nhóm bệnh lấy từ `Retriever.disease_groups`.
 - `ToolSession`: trạng thái tool của một request — đánh số `[Nguồn i]` xuyên suốt request (bài đã gặp dùng lại số cũ), không trả lại chunk đã trả, `get_article` chỉ nhận `document_id` đã xuất hiện trong kết quả tìm kiếm, cắt bài ở 8.000 ký tự. Chunk thuộc mục bị cắt được ghi "Đoạn k/n của mục"; mục chưa có đủ đoạn thì kết quả kèm gợi ý gọi `get_article` (vết chạy ghi `partial_sections`). Tham số sai trả về thành text để model tự sửa. Cuối mọi kết quả `search_medical_docs` / `get_article` có `DOSE_REMINDER` (nhắc không nêu liều thuốc), vì chỉ để quy tắc trong system instruction thì agent vẫn nêu liều khi tài liệu có ghi. `results` giữ mọi chunk đã trả theo thứ tự đánh số, nên `collect_sources(results)` khớp với số trong câu trả lời.
+- `ToolSession(retriever, allergies)`: có thuốc dị ứng trong hồ sơ thì kết quả tool kèm dòng nhắc cảnh báo cho thuốc được nhắc trong chunk (vết chạy ghi `allergy_hits`).
+
+### `app/rag/profile.py`
+- `UserProfile`: năm sinh, mang thai, bệnh nền, dị ứng. `from_dict` dùng cho golden set.
+- `profile_instruction(profile)`: khối "THÔNG TIN NGƯỜI HỎI" + quy tắc dùng (chỉ áp khi hỏi về chính mình, viết truy vấn kèm bệnh nền liên quan, không đổi quy tắc an toàn). `AgentService` nối vào cuối system instruction ở mọi vòng (`GeminiService.agent_turn(..., extra_instruction)`).
+- `find_allergies` / `allergy_notes`: so khớp nguyên từ, không phân biệt hoa thường và dấu. Chi tiết: [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md).
 
 ### `app/scripts/ingest.py`
 - Load → chunk → embed theo batch 32 → reset collection và lưu vào Chroma, in tiến độ từng batch.
@@ -271,6 +287,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 ### `eval/`
 - Bộ golden test và hai script đánh giá — cách chạy và kết quả: [../docs/RAG_EVAL.md](../docs/RAG_EVAL.md).
 - `eval_rag.py --agent`: chạy `AgentService`, lưu vết chạy và chỉ số hành vi gọi tool; `--resume` chạy tiếp từ `<out>.partial.jsonl` khi bị ngắt.
+- Câu có trường `profile` chạy kèm hồ sơ; `must_mention` / `must_not_mention` chấm thành `profile_ok` (`--types profile` để chỉ chạy nhóm này).
 
 ## Vì sao tách theo layer như vậy?
 

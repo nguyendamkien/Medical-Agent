@@ -27,6 +27,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.rag.guardrail import StreamRedactor
+from app.rag.profile import UserProfile, profile_instruction
 from app.rag.prompt import build_prompt
 from app.rag.retriever import Retriever
 from app.rag.tools import ToolSession, tool_declarations
@@ -49,30 +50,37 @@ class AgentService:
         self._retriever = retriever
         self._tools = tool_declarations(retriever.disease_groups)
 
-    def ask(self, message: str, history: list[ChatMessage]) -> tuple[str, list[Source]]:
-        result = self.ask_with_trace(message, history)
+    def ask(
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
+    ) -> tuple[str, list[Source]]:
+        result = self.ask_with_trace(message, history, profile)
         return result["reply"], result["sources"]
 
     def ask_with_context(
-        self, message: str, history: list[ChatMessage]
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
     ) -> tuple[str, list[Source], list[dict], str]:
         """Cùng dạng với RagService.ask_with_context (cho eval_rag.py). "Câu dùng để retrieve" là
         các truy vấn agent đã tìm, nối bằng " | "."""
-        result = self.ask_with_trace(message, history)
+        result = self.ask_with_trace(message, history, profile)
         queries = [call["args"].get("query", "") for call in result["trace"] if call["tool"] == "search_medical_docs"]
         return result["reply"], result["sources"], result["results"], " | ".join(queries)
 
-    def ask_with_trace(self, message: str, history: list[ChatMessage]) -> dict[str, Any]:
+    def ask_with_trace(
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
+    ) -> dict[str, Any]:
         """Chạy cả request, trả về câu trả lời, nguồn, mọi chunk đã lấy và vết chạy:
 
-            trace       mỗi lần gọi tool: tool, args, n_chunks, seconds, error (nếu có)
+            trace       mỗi lần gọi tool: tool, args, n_chunks, seconds, error / allergy_hits (nếu có)
             fallback    None | "no_context" (chốt chặn) | "empty_answer" (model không trả text)
             dose_redactions  các cụm liều thuốc guardrail đã che trong câu trả lời
-        """
-        session = ToolSession(self._retriever)
+
+        `profile`: hồ sơ sức khoẻ của người hỏi (None = không có / người dùng tắt)."""
+        session = self._session(profile)
         info: dict[str, Any] = {}
         reply = "".join(
-            data["text"] for event, data in self._run(message, history, session, info) if event == "delta"
+            data["text"]
+            for event, data in self._run(message, history, session, info, profile)
+            if event == "delta"
         )
         return {
             "reply": reply,
@@ -83,7 +91,9 @@ class AgentService:
             "dose_redactions": info.get("dose_redactions", []),
         }
 
-    def ask_stream(self, message: str, history: list[ChatMessage]) -> Iterator[tuple[str, dict]]:
+    def ask_stream(
+        self, message: str, history: list[ChatMessage], profile: UserProfile | None = None
+    ) -> Iterator[tuple[str, dict]]:
         """Phát từng sự kiện `(tên, dữ liệu)`, cùng định dạng với RagService.ask_stream:
 
             ("status",  {"stage": "thinking"})                       — trước lần gọi Gemini đầu
@@ -93,14 +103,22 @@ class AgentService:
             ("status",  {"stage": "generating"})
             ("delta",   {"text": "..."})
         """
-        yield from self._run(message, history, ToolSession(self._retriever), {})
+        yield from self._run(message, history, self._session(profile), {}, profile)
+
+    def _session(self, profile: UserProfile | None) -> ToolSession:
+        return ToolSession(self._retriever, allergies=profile.allergies if profile else None)
 
     def _run(
-        self, message: str, history: list[ChatMessage], session: ToolSession, info: dict[str, Any]
+        self,
+        message: str,
+        history: list[ChatMessage],
+        session: ToolSession,
+        info: dict[str, Any],
+        profile: UserProfile | None = None,
     ) -> Iterator[tuple[str, dict]]:
         """Luồng sự kiện của agent, chữ của câu trả lời đi qua guardrail liều thuốc (DOSE_GUARDRAIL):
         cụm liều bị che trước khi tới frontend. Các cụm đã che ghi vào info["dose_redactions"]."""
-        events = self._run_agent(message, history, session, info)
+        events = self._run_agent(message, history, session, info, profile)
         if not get_settings().dose_guardrail:
             yield from events
             return
@@ -120,9 +138,17 @@ class AgentService:
             logger.warning("Guardrail che liều thuốc trong câu trả lời: %s", redactor.redacted)
 
     def _run_agent(
-        self, message: str, history: list[ChatMessage], session: ToolSession, info: dict[str, Any]
+        self,
+        message: str,
+        history: list[ChatMessage],
+        session: ToolSession,
+        info: dict[str, Any],
+        profile: UserProfile | None,
     ) -> Iterator[tuple[str, dict]]:
         settings = get_settings()
+        # Hồ sơ người hỏi nằm trong system instruction ở MỌI vòng, để model dùng nó ngay khi viết
+        # truy vấn tìm kiếm đầu tiên (docs/HEALTH_PROFILE.md).
+        extra_instruction = profile_instruction(profile)
         history = trim_history(history, settings.history_max_turns)
         contents: list[Any] = to_contents(history) + [{"role": "user", "parts": [message]}]
         searches = 0  # lần tìm (đắt: embed + rerank) — giới hạn bởi AGENT_MAX_TOOL_CALLS
@@ -135,7 +161,7 @@ class AgentService:
             parts: list[Any] = []
             calls: list[Any] = []
             guarded = False
-            for part in self._gemini.agent_turn(contents, self._tools, allow_tools):
+            for part in self._gemini.agent_turn(contents, self._tools, allow_tools, extra_instruction):
                 parts.append(part)
                 if part.function_call.name:
                     calls.append(part.function_call)
@@ -184,7 +210,7 @@ class AgentService:
             # prompt ghép sẵn — có chunk thì build_rag_prompt, không có thì build_no_context_prompt.
             info.setdefault("fallback", "empty_answer")
             yield "status", {"stage": "generating"}
-            for text in self._gemini.ask_stream(build_prompt(message, session.results), history):
+            for text in self._gemini.ask_stream(build_prompt(message, session.results, profile), history):
                 yield "delta", {"text": text}
 
 

@@ -4,15 +4,19 @@ import AuthScreen from "./components/AuthScreen";
 import Sidebar from "./components/Sidebar";
 import MessageBubble from "./components/MessageBubble";
 import ChatInput from "./components/ChatInput";
+import ProfileModal from "./components/ProfileModal";
 import {
   LOGOUT_EVENT,
   clearToken,
   deleteConversation,
+  deleteProfile,
   fetchMe,
+  getProfile,
   getToken,
   listConversations,
   listMessages,
   renameConversation,
+  saveProfile,
   streamChatMessage,
 } from "./api/chatApi";
 import { WELCOME_MESSAGE, clearLegacySessions, fromApiMessage } from "./utils/sessions";
@@ -23,6 +27,16 @@ const DRAFT = "draft";
 
 /** Bỏ các cờ tạm của bong bóng đang stream. */
 const stripPending = ({ pending: _pending, status: _status, statusQuery: _statusQuery, ...m }) => m;
+
+/** Tóm tắt hồ sơ cho dòng trên ô chat, vd "Gout (Gút) · dị ứng aspirin · đang mang thai". */
+function summarizeProfile(profile) {
+  if (!profile) return "";
+  const parts = [...profile.conditions];
+  if (profile.allergies.length) parts.push(`dị ứng ${profile.allergies.join(", ")}`);
+  if (profile.pregnant) parts.push("đang mang thai");
+  if (profile.birth_year) parts.push(`sinh năm ${profile.birth_year}`);
+  return parts.join(" · ");
+}
 
 function App() {
   // undefined = đang kiểm tra token lúc mở trang; null = chưa đăng nhập; object = đã đăng nhập.
@@ -43,6 +57,11 @@ function App() {
   const [messagesError, setMessagesError] = useState(null); // { id, message }
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef(null);
+
+  // Hồ sơ sức khỏe (GET /api/profile). null = chưa tải được; backend đọc hồ sơ từ DB ở mỗi câu hỏi,
+  // state này chỉ để hiện dòng tóm tắt và điền sẵn form.
+  const [profile, setProfile] = useState(null);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   const activeKey = activeId ?? DRAFT;
   const activeMessages = messagesById[activeKey];
@@ -120,6 +139,23 @@ function App() {
   useEffect(() => {
     if (user) loadConversations();
   }, [user, loadConversations]);
+
+  useEffect(() => {
+    setProfile(null);
+    setIsProfileOpen(false);
+    if (user) getProfile().then(setProfile).catch(() => setProfile(null)); // lỗi: chỉ mất dòng tóm tắt
+  }, [user]);
+
+  async function handleSaveProfile(body) {
+    setProfile(await saveProfile(body));
+    setIsProfileOpen(false);
+  }
+
+  async function handleDeleteProfile() {
+    await deleteProfile();
+    setProfile(await getProfile());
+    setIsProfileOpen(false);
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -285,6 +321,7 @@ function App() {
           onDelete={handleDelete}
           onRetry={loadConversations}
           onLogout={handleLogout}
+          onOpenProfile={() => setIsProfileOpen(true)}
         />
 
         <div className="app-main">
@@ -310,6 +347,17 @@ function App() {
             <div ref={messagesEndRef} />
           </main>
 
+          {profile && (
+            <button className="profile-bar" onClick={() => setIsProfileOpen(true)}>
+              {!summarizeProfile(profile)
+                ? "➕ Thêm hồ sơ sức khỏe để câu trả lời sát với bạn hơn"
+                : profile.use_in_chat
+                  ? `Đang dùng hồ sơ: ${summarizeProfile(profile)}`
+                  : "Hồ sơ sức khỏe đang tắt khi trả lời"}
+              <span className="profile-bar__edit">Sửa</span>
+            </button>
+          )}
+
           <ChatInput
             onSend={handleSend}
             disabled={isSending || isLoadingMessages || Boolean(activeError)}
@@ -322,11 +370,19 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🩺 ChatBot Y Tế</h1>
-        <p>Hỏi đáp thông tin sức khỏe cùng trợ lý ảo (Gemini AI)</p>
+        <h1>🩺 Medical Chatbot</h1>
       </header>
 
       {body}
+
+      {user && isProfileOpen && (
+        <ProfileModal
+          profile={profile}
+          onSave={handleSaveProfile}
+          onDelete={handleDeleteProfile}
+          onClose={() => setIsProfileOpen(false)}
+        />
+      )}
 
       <footer className="app-footer">
         Thông tin do chatbot cung cấp chỉ mang tính tham khảo, không thay thế

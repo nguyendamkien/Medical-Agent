@@ -11,6 +11,8 @@ ToolSession giữ trạng thái của MỘT request, những việc không giao 
   khớp với số trong câu trả lời.
 - Không gửi lại chunk đã trả ở lần tìm trước.
 - get_article chỉ nhận document_id đã xuất hiện trong kết quả tìm kiếm của request này.
+- Người dùng có ghi dị ứng thuốc trong hồ sơ: đoạn tài liệu nào nhắc tới thuốc đó thì cuối kết quả
+  tool có thêm dòng nhắc cảnh báo (app/rag/profile.py → allergy_notes).
 """
 
 import logging
@@ -18,6 +20,7 @@ import time
 from typing import Any
 
 from app.config import get_settings
+from app.rag.profile import allergy_notes
 from app.rag.prompt import format_chunk, source_key
 from app.rag.retriever import Retriever
 
@@ -101,8 +104,10 @@ def tool_declarations(disease_groups: list[str]) -> dict[str, Any]:
 class ToolSession:
 	"""Trạng thái tool của một request."""
 
-	def __init__(self, retriever: Retriever) -> None:
+	def __init__(self, retriever: Retriever, allergies: list[str] | None = None) -> None:
 		self._retriever = retriever
+		self._allergies = allergies or []  # thuốc người dùng ghi dị ứng trong hồ sơ
+		self._allergy_hits = 0
 		self.results: list[dict] = []  # mọi chunk đã trả cho model, theo thứ tự đánh số
 		self.trace: list[dict] = []  # vết chạy: mỗi lần gọi tool một dòng
 		self._numbers: dict[str, int] = {}  # source_key → số [Nguồn i]
@@ -118,6 +123,7 @@ class ToolSession:
 		before = len(self.results)
 		entry: dict[str, Any] = {"tool": name, "args": args}
 		self._partial_sections = 0
+		self._allergy_hits = 0
 		try:
 			if name == "search_medical_docs":
 				output = self._search(str(args.get("query") or "").strip(), args.get("disease_group") or None)
@@ -132,6 +138,8 @@ class ToolSession:
 		entry["n_chunks"] = len(self.results) - before
 		if self._partial_sections:
 			entry["partial_sections"] = self._partial_sections  # số mục được gợi ý đọc tiếp bằng get_article
+		if self._allergy_hits:
+			entry["allergy_hits"] = self._allergy_hits  # số thuốc dị ứng được nhắc cảnh báo
 		entry["seconds"] = round(time.perf_counter() - started, 2)
 		self.trace.append(entry)
 		logger.info("Tool %s(%s) → %d chunk, %.1f s", name, args, entry["n_chunks"], entry["seconds"])
@@ -178,7 +186,12 @@ class ToolSession:
 			blocks.append(block)
 		notes = self._partial_section_notes(fresh)
 		self._partial_sections = len(notes)
-		return "\n\n".join(blocks + notes + [DOSE_REMINDER])
+		return "\n\n".join(blocks + notes + self._allergy_notes(fresh) + [DOSE_REMINDER])
+
+	def _allergy_notes(self, results: list[dict]) -> list[str]:
+		notes = allergy_notes(results, self._allergies, self._number)
+		self._allergy_hits = len(notes)
+		return notes
 
 	def _section_parts(self, result: dict) -> list[str]:
 		metadata = result["metadata"]
@@ -235,18 +248,20 @@ class ToolSession:
 		if truncated:
 			body = body[:ARTICLE_MAX_CHARS] + "…\n(đã cắt, gọi lại với `section` để đọc phần còn lại)"
 		# Đưa nội dung bài vào results như một chunk, để đánh giá thấy được context model đã đọc.
-		self.results.append({
+		chunk = {
 			"id": f"{document_id}#{section or 'article'}",
 			"text": body,
 			"metadata": {
 				**{key: article.get(key, "") for key in ("document_id", "title", "url", "citation", "disease_group")},
 				"section": ", ".join(item["heading"] for item in sections) if section else "Toàn bài",
 			},
-		})
+		}
+		self.results.append(chunk)
+		notes = "".join(f"{note}\n\n" for note in self._allergy_notes([chunk]))
 		return (
 			f"[Nguồn {index}] {article['title']} | document_id: {document_id}\n"
 			f"URL: {article['url']}\n"
-			f"Các mục của bài: {'; '.join(headings)}\n\n{body}\n\n{DOSE_REMINDER}"
+			f"Các mục của bài: {'; '.join(headings)}\n\n{body}\n\n{notes}{DOSE_REMINDER}"
 		)
 
 
