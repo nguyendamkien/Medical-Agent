@@ -1,5 +1,5 @@
 /**
- * Danh sách hội thoại của user (lấy từ backend) + nút tạo mới, đổi tên, xoá, đăng xuất.
+ * Danh sách hội thoại của user (lấy từ backend) + nút tạo mới, đổi tên, xoá, hồ sơ sức khỏe, đăng xuất.
  * Mọi thao tác chỉ gọi callback; App.jsx gọi API và cập nhật state.
  * `disabled` (đang chờ câu trả lời): khoá tạo mới / đổi tên / xoá / đăng xuất để không làm hỏng
  * lượt chat đang stream; vẫn cho chọn hội thoại khác để xem.
@@ -17,6 +17,7 @@ export default function Sidebar({
   onDelete,
   onRetry,
   onLogout,
+  onOpenProfile,
 }) {
   return (
     <aside className="sidebar">
@@ -79,6 +80,10 @@ export default function Sidebar({
           </div>
         ))}
       </div>
+
+      <button className="sidebar__profile-btn" onClick={onOpenProfile}>
+        🩺 Hồ sơ sức khỏe
+      </button>
 
       <div className="sidebar__user">
         <div className="sidebar__user-info">

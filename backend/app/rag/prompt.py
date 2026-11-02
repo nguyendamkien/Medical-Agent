@@ -1,6 +1,8 @@
 """Prompt construction for grounded medical answers."""
 
-from typing import Any
+from typing import Any, Callable
+
+from app.rag.profile import UserProfile, allergy_notes, profile_instruction
 
 
 def source_key(metadata: dict[str, Any]) -> str:
@@ -13,13 +15,14 @@ def build_context(results: list[dict[str, Any]]) -> str:
 	"[Nguồn i]" trong câu trả lời khớp với nguồn thứ i trong danh sách trả về frontend."""
 	if not results:
 		return "Không tìm thấy tài liệu phù hợp trong cơ sở dữ liệu."
+	number = source_numberer()
+	return "\n\n".join(format_chunk(result, number(result.get("metadata", {}))) for result in results)
+
+
+def source_numberer() -> Callable[[dict[str, Any]], int]:
+	"""Hàm đánh số [Nguồn i] theo bài, theo thứ tự gặp lần đầu (cùng cách với build_context)."""
 	numbers: dict[str, int] = {}
-	blocks = []
-	for result in results:
-		metadata = result.get("metadata", {})
-		index = numbers.setdefault(source_key(metadata), len(numbers) + 1)
-		blocks.append(format_chunk(result, index))
-	return "\n\n".join(blocks)
+	return lambda metadata: numbers.setdefault(source_key(metadata), len(numbers) + 1)
 
 
 def format_chunk(result: dict[str, Any], index: int, with_document_id: bool = False) -> str:
@@ -31,8 +34,12 @@ def format_chunk(result: dict[str, Any], index: int, with_document_id: bool = Fa
 	return f"{header}\nNội dung: {result.get('text', '')}\nURL: {metadata.get('url', '')}"
 
 
-def build_rag_prompt(question: str, context: str) -> str:
-	return f"""Dựa CHỈ trên CONTEXT dưới đây, hãy trả lời câu hỏi bằng tiếng Việt.
+def build_rag_prompt(question: str, context: str, profile_text: str = "", notes: list[str] | None = None) -> str:
+	"""`profile_text`: khối thông tin người hỏi (profile_instruction), đặt trước CONTEXT.
+	`notes`: các dòng nhắc dị ứng (allergy_notes), đặt ngay sau CONTEXT."""
+	profile_part = f"{profile_text}\n" if profile_text else ""
+	notes_part = "\n\n" + "\n".join(notes) if notes else ""
+	return f"""{profile_part}Dựa CHỈ trên CONTEXT dưới đây, hãy trả lời câu hỏi bằng tiếng Việt.
 
 Quy tắc:
 - Nếu context không đủ, nói rõ là chưa tìm thấy thông tin phù hợp; không tự bịa.
@@ -45,7 +52,7 @@ phải do bác sĩ chỉ định.
 - Trả lời ngắn gọn, dễ hiểu và nêu nguồn khi sử dụng thông tin.
 
 CONTEXT:
-{context}
+{context}{notes_part}
 
 CÂU HỎI:
 {question}
@@ -82,7 +89,10 @@ CÂU HỎI:
 """
 
 
-def build_prompt(question: str, results: list[dict[str, Any]]) -> str:
+def build_prompt(question: str, results: list[dict[str, Any]], profile: UserProfile | None = None) -> str:
+	"""Hồ sơ người hỏi chỉ đưa vào khi có tài liệu: không có tài liệu thì câu trả lời chỉ được nói
+	"chưa có thông tin", hồ sơ (vd "bệnh nền gout") chỉ thêm cớ để model kể kiến thức riêng."""
 	if not results:
 		return build_no_context_prompt(question)
-	return build_rag_prompt(question, build_context(results))
+	notes = allergy_notes(results, profile.allergies, source_numberer()) if profile else []
+	return build_rag_prompt(question, build_context(results), profile_instruction(profile), notes)

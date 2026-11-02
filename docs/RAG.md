@@ -241,13 +241,13 @@ Hybrid cứu được các câu dense bỏ lỡ vì thuật ngữ hiếm (`gout-
 
 ## Đánh giá
 
-Xem [RAG_EVAL.md](RAG_EVAL.md): bộ golden test 70 câu, script đo retrieval (`eval/eval_retrieval.py`, so được dense / hybrid / rerank) và script chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo (`eval/eval_rag.py`).
+Xem [RAG_EVAL.md](RAG_EVAL.md): bộ golden test 108 câu, script đo retrieval (`eval/eval_retrieval.py`, so được dense / hybrid / rerank) và script chấm end-to-end theo tiêu chí RAG bằng LLM giám khảo (`eval/eval_rag.py`).
 
 ## Hạn chế đã biết
 
 - **Khi tắt rerank, `RAG_MIN_SCORE = 0.25` gần như không lọc được gì**: cosine của câu ngoài phạm vi (tới 0.52) chồng lên câu có đáp án (từ 0.48), việc từ chối dựa vào prompt. Bật rerank thì `RERANK_MIN_SCORE` giải quyết được, nhưng rerank chậm trên CPU.
 - **Câu hỏi nối tiếp** phụ thuộc vào bước viết lại câu hỏi: tắt `QUERY_REWRITE_ENABLED` thì retrieval chỉ dùng câu hỏi hiện tại và lấy sai tài liệu. Bật thì mỗi câu hỏi nối tiếp tốn thêm 1 lần gọi Gemini.
-- **Lịch sử chỉ lưu ở trình duyệt** và bị cắt còn `HISTORY_MAX_TURNS` lượt — chatbot không nhớ thông tin từ các lượt cũ hơn hay từ cuộc trò chuyện khác.
+- **Lịch sử gửi cho model bị cắt còn `HISTORY_MAX_TURNS` lượt**: toàn bộ hội thoại vẫn lưu trong PostgreSQL (xem [AUTH_CHAT_HISTORY.md](AUTH_CHAT_HISTORY.md)), nhưng chatbot không nhớ thông tin từ các lượt cũ hơn hay từ hội thoại khác.
 - **Đường dẫn tương đối** (`DATA_PATH`, `VECTOR_DB_PATH`) chỉ đúng khi chạy lệnh từ thư mục `backend/`.
 - **`reset()` chạy trước khi embed**: nếu ingest lỗi giữa chừng, index sẽ trống hoặc thiếu cho tới khi chạy lại thành công.
 - Bước chunk gộp mọi khoảng trắng/xuống dòng trước khi cắt, nên cấu trúc đoạn văn và danh sách không được giữ.

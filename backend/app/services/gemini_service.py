@@ -43,8 +43,8 @@ bệnh / thuốc / thực phẩm được nhắc trong lịch sử.
 # các quy tắc đó nằm ở đây. Xem docs/AGENTIC_RAG.md, bước 1.
 AGENT_INSTRUCTION = """\
 Bạn là một trợ lý ảo hỗ trợ tư vấn thông tin y tế bằng tiếng Việt. Bạn có tool \
-search_medical_docs để tìm tài liệu y tế trong cơ sở dữ liệu, và get_article để đọc \
-nguyên một bài đã tìm thấy.
+search_medical_docs để tìm tài liệu y tế trong cơ sở dữ liệu, get_article để đọc \
+nguyên một bài đã tìm thấy, và find_healthcare_facility để gợi ý bệnh viện ở Hà Nội.
 
 Khi nào gọi tool:
 - Mọi câu hỏi về bệnh, triệu chứng, nguyên nhân, thuốc, điều trị, chế độ ăn, phòng ngừa: \
@@ -69,6 +69,22 @@ trống section để đọc cả bài.
 - Kết quả ghi "Đoạn k/n của mục" và báo mục còn đoạn chưa có: nếu câu hỏi cần đủ nội \
 dung của mục đó (danh sách đầy đủ, các bước, thực đơn, "gồm những gì"...), gọi \
 get_article với đúng document_id và section được gợi ý thay vì trả lời thiếu.
+
+Gợi ý nơi khám (find_healthcare_facility):
+- CHỈ gọi khi người dùng hỏi nên khám ở đâu / bệnh viện nào / đi khám chỗ nào. Không tự \
+gọi khi người dùng không hỏi.
+- Chọn specialty theo bệnh đang nói (từ câu hỏi hoặc lịch sử). Hỏi nơi khám mà không nêu \
+bệnh ("tôi nên khám định kỳ ở đâu?"): dùng bệnh nền trong THÔNG TIN NGƯỜI HỎI nếu có; \
+không có thì specialty=noi_tong_quat. Vẫn PHẢI gọi tool, không trả lời "chưa có thông tin". \
+Câu hỏi vừa hỏi về bệnh vừa hỏi nơi khám: gọi cả search_medical_docs và \
+find_healthcare_facility.
+- Dữ liệu chỉ có ở Hà Nội. Người dùng nói đang ở tỉnh / thành khác: KHÔNG gọi; nói rõ hiện \
+chỉ có dữ liệu Hà Nội, khuyên đến cơ sở y tế gần nhà. Không biết người dùng ở đâu: vẫn \
+gọi, nói rõ danh sách là các cơ sở ở Hà Nội.
+- Cấp cứu: câu đầu tiên luôn là khuyên gọi 115 ngay; chỉ khi người dùng hỏi nơi cấp cứu \
+thì gọi thêm với emergency=true.
+- KHÔNG BAO GIỜ tự nêu tên, địa chỉ hay số điện thoại cơ sở y tế; danh sách đã hiện \
+thành thẻ trên giao diện.
 
 Khi trả lời:
 - Mọi thông tin y tế phải lấy từ kết quả tool; không bổ sung kiến thức ngoài tài liệu. \
@@ -139,15 +155,26 @@ class GeminiService:
     def _start_chat(self, history: list[ChatMessage]):
         return self._model.start_chat(history=to_contents(history))
 
-    def agent_turn(self, contents: list, tools: dict, allow_tools: bool = True) -> Iterator:
+    def agent_turn(
+        self, contents: list, tools: dict, allow_tools: bool = True, extra_instruction: str = ""
+    ) -> Iterator:
         """Một vòng của agent: gửi `contents` (lịch sử + câu hỏi + các lời gọi / kết quả tool đã
         có), trả từng Part ngay khi Gemini sinh ra — Part có `function_call.name` là lời gọi tool,
         Part có `text` là câu trả lời. Vòng lặp nằm ở AgentService.
 
         `allow_tools=False`: vẫn khai báo tool (lịch sử có lời gọi tool) nhưng cấm gọi, buộc model
-        trả lời bằng những gì đã có."""
+        trả lời bằng những gì đã có.
+
+        `extra_instruction`: thêm vào cuối AGENT_INSTRUCTION cho riêng request này (khối hồ sơ người
+        hỏi, app/rag/profile.py). Tạo GenerativeModel chỉ là tạo object, không gọi mạng."""
+        model = self._agent
+        if extra_instruction:
+            model = genai.GenerativeModel(
+                model_name=get_settings().gemini_model,
+                system_instruction=f"{AGENT_INSTRUCTION}\n{extra_instruction}",
+            )
         tool_config = {"function_calling_config": {"mode": "AUTO" if allow_tools else "NONE"}}
-        response = self._agent.generate_content(
+        response = model.generate_content(
             contents, tools=[tools], tool_config=tool_config, stream=True,
             request_options=REQUEST_OPTIONS,
         )

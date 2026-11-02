@@ -1,6 +1,7 @@
-"""Các bảng PostgreSQL: users, conversations, messages.
+"""Các bảng PostgreSQL: users, conversations, messages, health_profiles.
 
 Quan hệ:  User 1 ── n Conversation 1 ── n Message
+          User 1 ── 0..1 HealthProfile
 - Mỗi class dưới đây = một bảng. Mỗi thuộc tính `Mapped[...] = mapped_column(...)` = một cột.
 - Sửa file này xong phải tạo migration mới để DB đổi theo:
     python -m alembic revision --autogenerate -m "mô tả thay đổi"
@@ -10,7 +11,7 @@ Quan hệ:  User 1 ── n Conversation 1 ── n Message
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -83,6 +84,35 @@ class Message(Base):
     # JSONB: lưu nguyên danh sách nguồn trích dẫn RAG [{title, url, citation}, ...] của câu trả lời.
     # None với tin nhắn của user.
     sources: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Thẻ cơ sở y tế agent gợi ý (find_healthcare_facility, docs/FACILITIES.md), lưu nguyên như lúc
+    # gửi để mở lại hội thoại vẫn thấy đúng danh sách đã gợi ý. None khi không có.
+    facilities: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+class HealthProfile(Base):
+    """Hồ sơ sức khoẻ người dùng tự khai, đưa vào prompt của chatbot (docs/HEALTH_PROFILE.md).
+
+    Mỗi user tối đa một hồ sơ: user_id vừa là khoá chính vừa là khoá ngoại. Chưa lưu lần nào thì
+    không có dòng nào — API trả hồ sơ rỗng.
+    Đây là dữ liệu sức khoẻ: không ghi vào log, người dùng xoá được (DELETE /api/profile).
+    """
+
+    __tablename__ = "health_profiles"
+
+    # ondelete="CASCADE": xoá user → xoá hồ sơ.
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    # Lưu năm sinh thay vì tuổi để tuổi không bị cũ theo thời gian.
+    birth_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pregnant: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Danh sách chuỗi, vd ["Gout (Gút)", "Tăng huyết áp"]. Chọn từ nhóm bệnh có trong dữ liệu hoặc gõ thêm.
+    conditions: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # Tên thuốc / nhóm thuốc dị ứng, vd ["aspirin"]. Code quét tên này trong tài liệu (rag/profile.py).
+    allergies: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # Người dùng tắt được việc chatbot dùng hồ sơ mà không phải xoá hồ sơ.
+    use_in_chat: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

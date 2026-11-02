@@ -78,7 +78,9 @@ function formatDetail(detail) {
         if (field === "email") return "Email không hợp lệ.";
         if (field === "password") return "Mật khẩu phải có từ 8 đến 128 ký tự.";
         if (field === "display_name") return "Tên hiển thị không được để trống.";
-        return item.msg;
+        if (field === "birth_year") return "Năm sinh không hợp lệ.";
+        // Lỗi từ validator của Pydantic có dạng "Value error, <thông báo tiếng Việt>".
+        return item.msg?.replace(/^Value error, /, "");
       })
       .join(" ");
   }
@@ -134,6 +136,32 @@ export async function deleteConversation(conversationId) {
   await apiFetch(`/api/conversations/${conversationId}`, { method: "DELETE" });
 }
 
+// ---------- Hồ sơ sức khỏe ----------
+// Hồ sơ: { birth_year, pregnant, conditions: string[], allergies: string[], use_in_chat, updated_at }
+// updated_at = null nghĩa là người dùng chưa lưu hồ sơ lần nào.
+
+export async function getProfile() {
+  return (await apiFetch("/api/profile")).json();
+}
+
+/** Lưu cả hồ sơ (ghi đè). Trả về hồ sơ đã lưu. */
+export async function saveProfile(profile) {
+  const response = await apiFetch("/api/profile", {
+    method: "PUT",
+    body: JSON.stringify(profile),
+  });
+  return response.json();
+}
+
+export async function deleteProfile() {
+  await apiFetch("/api/profile", { method: "DELETE" });
+}
+
+/** { conditions: string[] } — các nhóm bệnh có trong dữ liệu, để gợi ý ở form. */
+export async function getProfileOptions() {
+  return (await apiFetch("/api/profile/options")).json();
+}
+
 // ---------- Chat ----------
 
 /**
@@ -147,16 +175,18 @@ export async function deleteConversation(conversationId) {
  * @param {object} handlers
  * @param {(conversation: {id: string, title: string}) => void} [handlers.onConversation]
  *   Sự kiện đầu tiên: id + tiêu đề hội thoại (id mới nếu vừa tạo).
- * @param {(stage: "thinking"|"rewriting"|"retrieving"|"reading"|"generating", data: object) => void} [handlers.onStatus]
+ * @param {(stage: "thinking"|"rewriting"|"retrieving"|"reading"|"finding_facility"|"generating", data: object) => void} [handlers.onStatus]
  *   `data` là cả sự kiện; với agent, `retrieving` kèm `query` đang tìm.
  * @param {(sources: object[]) => void} [handlers.onSources]
+ * @param {(facilities: object[]) => void} [handlers.onFacilities]
+ *   Thẻ cơ sở y tế agent gợi ý (danh sách đầy đủ tới lúc đó).
  * @param {(text: string) => void} [handlers.onDelta] - Từng đoạn câu trả lời mới.
  * @returns {Promise<void>} Resolve khi nhận sự kiện `done`; reject khi lỗi.
  */
 export async function streamChatMessage(
   message,
   conversationId,
-  { onConversation, onStatus, onSources, onDelta } = {}
+  { onConversation, onStatus, onSources, onFacilities, onDelta } = {}
 ) {
   const response = await apiFetch("/api/chat/stream", {
     method: "POST",
@@ -179,6 +209,7 @@ export async function streamChatMessage(
       if (event === "conversation") onConversation?.(data);
       else if (event === "status") onStatus?.(data.stage, data);
       else if (event === "sources") onSources?.(data.sources);
+      else if (event === "facilities") onFacilities?.(data.facilities);
       else if (event === "delta") onDelta?.(data.text);
       else if (event === "error") throw new Error(data.detail);
       else if (event === "done") return;

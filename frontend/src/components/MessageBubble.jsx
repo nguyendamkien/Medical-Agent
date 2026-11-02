@@ -1,5 +1,6 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import FacilityCards from "./FacilityCards";
 
 // Link trong câu trả lời của bot mở tab mới, không rời khỏi trang chat.
 const MARKDOWN_COMPONENTS = {
@@ -12,10 +13,20 @@ const STATUS_TEXT = {
   rewriting: "Đang phân tích câu hỏi…",
   retrieving: "Đang tìm tài liệu liên quan…",
   reading: "Đang đọc bài viết…",
+  finding_facility: "Đang tìm nơi khám phù hợp…",
   generating: "Đang soạn câu trả lời…",
 };
 
-export default function MessageBubble({ role, content, isError, sources = [], pending, status, statusQuery }) {
+export default function MessageBubble({
+  role,
+  content,
+  isError,
+  sources = [],
+  facilities = [],
+  pending,
+  status,
+  statusQuery,
+}) {
   const isUser = role === "user";
   const isWaiting = pending && !content;
   // Câu trả lời của Gemini là markdown (**đậm**, danh sách…); tin nhắn người dùng và lỗi giữ nguyên văn.
@@ -48,6 +59,7 @@ export default function MessageBubble({ role, content, isError, sources = [], pe
         ) : (
           content
         )}
+        {!isUser && !isWaiting && <FacilityCards facilities={facilities} />}
         {/* Nguồn về trước chữ — chờ có câu trả lời rồi mới hiện để không nằm lơ lửng. */}
         {!isUser && !isWaiting && sources.length > 0 && (
           <div className="message-sources">
