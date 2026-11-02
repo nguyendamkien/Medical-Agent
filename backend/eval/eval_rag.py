@@ -36,6 +36,7 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.rag.embeddings import _get_client
+from app.observability import flush as flush_traces, start_trace
 from app.rag.profile import UserProfile
 from app.schemas import ChatMessage
 from app.services.agent_service import get_agent_service
@@ -218,25 +219,49 @@ def profile_checks(item: dict, answer: str) -> dict:
 	return {"profile_ok": not missing and not unwanted, "profile_missing": missing, "profile_unwanted": unwanted}
 
 
-def run_item(item: dict, judge_model: str, use_agent: bool) -> dict:
+def run_item(item: dict, judge_model: str, use_agent: bool, run_id: str = "") -> dict:
+	"""Chạy và chấm một câu. Bật Langfuse (docs/OBSERVABILITY.md) thì mỗi câu là một trace tên
+	"eval <id>", cả lần chạy chung session `run_id`, các chỉ số gắn thành score của trace."""
+	trace = start_trace(
+		f"eval {item['id']}",
+		session_id=run_id or None,
+		tags=["eval", "agent" if use_agent else "rag", item["type"]],
+		input=item["question"],
+		metadata={"eval_id": item["id"], "expected_behavior": item["expected_behavior"]},
+		mask=False,  # câu hỏi mẫu trong golden set, không phải dữ liệu người dùng thật
+	)
+	try:
+		row = _run_item(item, judge_model, use_agent, trace)
+		if "error" in row:
+			trace.update(level="ERROR", status_message=row["error"])
+		for name in (*METRICS, "profile_ok", "facility_ok", "latency_s"):
+			if row.get(name) is not None:
+				trace.score_trace(name, float(row[name]))
+		return row
+	finally:
+		trace.end()
+
+
+def _run_item(item: dict, judge_model: str, use_agent: bool, trace) -> dict:
 	history = [ChatMessage(**m) for m in item["history"]]
 	profile = UserProfile.from_dict(item.get("profile"))
 	base = {"id": item["id"], "type": item["type"], "question": item["question"]}
 	started = time.perf_counter()
 	try:
 		if use_agent:
-			result = with_retry(get_agent_service().ask_with_trace, item["question"], history, profile)
+			result = with_retry(get_agent_service().ask_with_trace, item["question"], history, profile, trace)
 			answer, results = result["reply"], result["results"]
 			search_query = " | ".join(
 				call["args"].get("query", "") for call in result["trace"] if call["tool"] == "search_medical_docs"
 			)
 		else:
 			answer, _, results, search_query = with_retry(
-				get_rag_service().ask_with_context, item["question"], history, profile
+				get_rag_service().ask_with_context, item["question"], history, profile, trace
 			)
 	except Exception as exc:
 		return {**base, "error": f"generation: {exc}"}
 	latency = time.perf_counter() - started
+	trace.update(output=answer)
 	try:
 		verdict = with_retry(judge, item, answer, results, judge_model)
 	except Exception as exc:
@@ -379,7 +404,9 @@ def main() -> None:
 	lock = threading.Lock()
 	total = len(rows) + len(golden)
 	with ThreadPoolExecutor(max_workers=args.workers) as pool:
-		for row in pool.map(lambda item: run_item(item, args.judge_model, args.agent), golden):
+		# Một session Langfuse cho cả lần chạy, vd "eval-agent-20261102-0930".
+		run_id = f"eval-{'agent' if args.agent else 'rag'}-{time.strftime('%Y%m%d-%H%M')}"
+		for row in pool.map(lambda item: run_item(item, args.judge_model, args.agent, run_id), golden):
 			rows.append(row)
 			with lock, partial.open("a", encoding="utf-8") as file:
 				file.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -412,6 +439,7 @@ def main() -> None:
 
 	out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
 	print(f"\nChi tiết từng câu (câu trả lời, claim không được hỗ trợ, vết chạy agent...): {out}")
+	flush_traces()  # script sắp thoát: gửi nốt trace còn chờ lên Langfuse (tắt thì không làm gì)
 
 
 if __name__ == "__main__":

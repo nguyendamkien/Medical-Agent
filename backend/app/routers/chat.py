@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Conversation, Message, User
+from app.observability import Observation, start_trace
 from app.routers.conversations import get_owned_conversation
 from app.routers.profile import load_chat_profile
 from app.schemas import ChatMessage, ChatRequest, ChatResponse
@@ -111,19 +112,48 @@ def chat(
     conversation_id, _, history = _prepare_conversation(request, user, db)
     profile = load_chat_profile(db, user)
     facilities: list[dict] = []
+    trace = _start_chat_trace(request, user, conversation_id, service, profile, stream=False)
     try:
         if isinstance(service, AgentService):
-            result = service.ask_with_trace(request.message, history, profile)
+            result = service.ask_with_trace(request.message, history, profile, trace)
             reply, sources, facilities = result["reply"], result["sources"], result["facilities"]
         else:
-            reply, sources = service.ask(request.message, history, profile)
+            reply, sources = service.ask(request.message, history, profile, trace)
+        trace.update(output=reply)
     except RuntimeError as exc:
+        trace.update(level="ERROR", status_message=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
+        trace.update(level="ERROR", status_message=str(exc))
         raise HTTPException(status_code=502, detail=f"Không thể lấy phản hồi từ Gemini: {exc}") from exc
+    finally:
+        trace.end()
 
     _save_turn(conversation_id, request.message, reply, [s.model_dump() for s in sources], facilities)
     return ChatResponse(reply=reply, sources=sources, facilities=facilities)
+
+
+def _start_chat_trace(
+    request: ChatRequest,
+    user: User,
+    conversation_id: uuid.UUID,
+    service: RagService | AgentService,
+    profile: object,
+    stream: bool,
+) -> Observation:
+    """Trace gốc của một lượt chat (docs/OBSERVABILITY.md). user_id là id (UUID), không dùng email;
+    session_id là id hội thoại, nên Langfuse gom được các lượt của cùng một cuộc trò chuyện."""
+    tags = ["chat", "agent" if isinstance(service, AgentService) else "rag"]
+    if profile is not None:
+        tags.append("has_profile")
+    return start_trace(
+        "chat",
+        user_id=str(user.id),
+        session_id=str(conversation_id),
+        tags=tags,
+        input=request.message,
+        metadata={"stream": stream, "new_conversation": request.conversation_id is None},
+    )
 
 
 def _sse(event: str, data: dict) -> str:
@@ -144,32 +174,46 @@ def chat_stream(
     # Đọc trước khi mở stream: session `db` đã đóng khi stream chạy (xem _save_turn).
     profile = load_chat_profile(db, user)
 
-    def events() -> Iterator[str]:
-        yield _sse("conversation", {"id": str(conversation_id), "title": title})
-        reply_parts: list[str] = []
-        sources: list[dict] = []
-        facilities: list[dict] = []
-        try:
-            for event, data in service.ask_stream(request.message, history, profile):
-                if event == "delta":
-                    reply_parts.append(data["text"])  # chữ đã qua guardrail liều thuốc
-                elif event == "sources":
-                    sources = data["sources"]  # sự kiện sau chứa danh sách đầy đủ hơn
-                elif event == "facilities":
-                    facilities = data["facilities"]  # như sources: sự kiện sau là danh sách đầy đủ
-                yield _sse(event, data)
-        except Exception as exc:
-            logger.exception("Lỗi khi stream câu trả lời")
-            yield _sse("error", {"detail": f"Không thể lấy phản hồi từ Gemini: {exc}"})
-            return  # không lưu câu trả lời dở
+    trace = _start_chat_trace(request, user, conversation_id, service, profile, stream=True)
 
+    def events() -> Iterator[str]:
+        reply_parts: list[str] = []
+        finished = False  # False ở finally = người dùng ngắt giữa chừng (đóng tab, bấm dừng)
         try:
-            _save_turn(conversation_id, request.message, "".join(reply_parts), sources, facilities)
-        except Exception:
-            logger.exception("Không lưu được lượt chat vào DB")
-            yield _sse("error", {"detail": "Đã trả lời nhưng không lưu được vào lịch sử."})
-            return
-        yield _sse("done", {"disclaimer": ChatResponse.model_fields["disclaimer"].default})
+            yield _sse("conversation", {"id": str(conversation_id), "title": title})
+            sources: list[dict] = []
+            facilities: list[dict] = []
+            try:
+                for event, data in service.ask_stream(request.message, history, profile, trace):
+                    if event == "delta":
+                        reply_parts.append(data["text"])  # chữ đã qua guardrail liều thuốc
+                    elif event == "sources":
+                        sources = data["sources"]  # sự kiện sau chứa danh sách đầy đủ hơn
+                    elif event == "facilities":
+                        facilities = data["facilities"]  # như sources: sự kiện sau là danh sách đầy đủ
+                    yield _sse(event, data)
+            except Exception as exc:
+                logger.exception("Lỗi khi stream câu trả lời")
+                trace.update(level="ERROR", status_message=str(exc))
+                finished = True
+                yield _sse("error", {"detail": f"Không thể lấy phản hồi từ Gemini: {exc}"})
+                return  # không lưu câu trả lời dở
+
+            try:
+                _save_turn(conversation_id, request.message, "".join(reply_parts), sources, facilities)
+            except Exception as exc:
+                logger.exception("Không lưu được lượt chat vào DB")
+                trace.update(level="ERROR", status_message=f"Không lưu được vào DB: {exc}")
+                finished = True
+                yield _sse("error", {"detail": "Đã trả lời nhưng không lưu được vào lịch sử."})
+                return
+            finished = True
+            yield _sse("done", {"disclaimer": ChatResponse.model_fields["disclaimer"].default})
+        finally:
+            trace.update(output="".join(reply_parts))
+            if not finished:
+                trace.update(level="WARNING", status_message="Người dùng ngắt kết nối trước khi trả lời xong")
+            trace.end()
 
     return StreamingResponse(
         events(),
