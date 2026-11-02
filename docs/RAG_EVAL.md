@@ -178,6 +178,7 @@ Kết quả chi tiết từng câu (câu trả lời, chunk lấy về, claim kh
 - **`must_mention` / `must_not_mention`:** chấm thành `profile_ok` (cả pipeline cố định lẫn agent), cuối lần chạy in "must_mention / must_not_mention: x/y câu đạt" và các câu trượt.
 - **Câu `facility`:** faithfulness ít ý nghĩa, vì câu dẫn không dựa trên tài liệu bài viết (giám khảo có thể chấm 0 cho câu "nên khám chuyên khoa cơ xương khớp"). Xem `facility_ok` và `profile_ok`.
 - **Thời gian:** script in trung vị / max thời gian sinh câu trả lời theo loại câu (không tính giám khảo). Chỉ so được khi chạy `--workers 1` — chạy song song các luồng tranh CPU với reranker.
+- **Trace trên Langfuse** (khi `LANGFUSE_ENABLED=true`): mỗi câu là một trace `eval <id>`, cả lần chạy chung một session (vd `eval-agent-20261102-0930`), các chỉ số gắn thành score. Lọc tag `eval`, sắp theo score để mở đúng trace của câu trượt và xem agent đã tìm gì, tool trả gì. Trace eval luôn gửi đủ nội dung (câu hỏi mẫu). Xem [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ### Bộ tiêu chí
 

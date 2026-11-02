@@ -1,6 +1,6 @@
 # Cấu trúc Backend (FastAPI + RAG)
 
-Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). Hồ sơ sức khỏe: xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md). Gợi ý nơi khám: xem [../docs/FACILITIES.md](../docs/FACILITIES.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
+Chi tiết về pipeline RAG (chunking, hybrid retrieval, rerank, số liệu đo): xem [../docs/RAG.md](../docs/RAG.md). Đăng nhập và lưu lịch sử chat: xem [../docs/AUTH_CHAT_HISTORY.md](../docs/AUTH_CHAT_HISTORY.md). Hồ sơ sức khỏe: xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md). Gợi ý nơi khám: xem [../docs/FACILITIES.md](../docs/FACILITIES.md). Trace bằng Langfuse: xem [../docs/OBSERVABILITY.md](../docs/OBSERVABILITY.md). File này tập trung vào **code nằm ở đâu và gọi nhau thế nào**.
 
 ## Cây thư mục
 
@@ -19,6 +19,7 @@ backend/
 │   ├── db.py                      # Kết nối PostgreSQL: engine, SessionLocal, Base, get_db
 │   ├── models.py                  # Bảng users, conversations, messages, health_profiles (SQLAlchemy)
 │   ├── security.py                # Băm mật khẩu argon2, tạo / kiểm tra JWT, get_current_user
+│   ├── observability.py           # Trace lên Langfuse Cloud: start_trace, Observation, NOOP (tắt mặc định)
 │   ├── routers/
 │   │   ├── auth.py                # POST /api/auth/register, /login, GET /api/auth/me
 │   │   ├── conversations.py       # GET/PATCH/DELETE /api/conversations… (sidebar)
@@ -168,6 +169,12 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `HealthProfile` (`health_profiles`): `user_id` vừa là khoá chính vừa → users (`ON DELETE CASCADE`), nên mỗi user tối đa một hồ sơ. `birth_year`, `pregnant`, `conditions` / `allergies` (JSONB list), `use_in_chat`, `updated_at`. Xem [../docs/HEALTH_PROFILE.md](../docs/HEALTH_PROFILE.md).
 - Sửa file này thì phải tạo migration mới (xem luồng 4 ở trên).
 
+### `app/observability.py`
+- Lớp bọc mỏng quanh SDK Langfuse ([../docs/OBSERVABILITY.md](../docs/OBSERVABILITY.md)). `start_trace(name, user_id, session_id, tags, input, mask)` mở trace gốc; `Observation.child()` / `update()` / `end()` / `score_trace()`.
+- Tắt (`LANGFUSE_ENABLED=false`, thiếu key, chưa cài thư viện) → trả `NOOP`, mọi hàm không làm gì. Mọi lời gọi SDK nằm trong `try`, lỗi chỉ ghi log.
+- `LANGFUSE_MASK_CONTENT=true`: input / output thay bằng chuỗi `[ẩn …]`; nơi gọi chỉ đưa vào `metadata` thứ không phải nội dung.
+- Các service nhận tham số `trace` (mặc định `NOOP`): `ask`, `ask_with_context`, `ask_with_trace`, `ask_stream` của `AgentService` và `RagService`. Router chat mở trace gốc và đóng trong `finally`.
+
 ### `app/security.py`
 - `hash_password` / `verify_password`: argon2 qua `pwdlib`.
 - `create_access_token(user_id)`: JWT HS256 ký bằng `JWT_SECRET`, gồm `sub` (id user) và `exp` (sau `JWT_EXPIRE_DAYS` ngày). Thiếu `JWT_SECRET` thì báo `RuntimeError`.
@@ -226,6 +233,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `SYSTEM_INSTRUCTION`: prompt hệ thống cố định — chỉ dùng thông tin trong tài liệu được đưa kèm, không chẩn đoán cá nhân, không kê đơn, khuyến cáo đi khám / gọi 115 khi có dấu hiệu nguy hiểm. Sửa "cách cư xử" của chatbot ở đây; sửa quy tắc bám context ở `rag/prompt.py`.
 - `GeminiService.rewrite_query(message, history)`: gọi Gemini với prompt riêng (`REWRITE_INSTRUCTION`, temperature 0) để viết câu hỏi nối tiếp thành câu độc lập; câu trả lời cũ của bot chỉ lấy 500 ký tự đầu.
 - `GeminiService.ask(message, history)`: chuyển `history` sang format Gemini SDK (`{"role", "parts"}`), mở phiên chat với lịch sử đó và gửi prompt RAG làm tin nhắn mới nhất.
+- `ask`, `ask_stream`, `agent_turn`, `rewrite_query` nhận thêm `usage: dict | None`: `record_usage()` điền số token (`input` / `output` / `total`) từ `usage_metadata` của Gemini, để ghi lên trace Langfuse.
 
 ### `app/rag/loader.py`
 - `load_documents(path)`: đọc JSONL UTF-8 từng dòng, bỏ dòng trống và bản ghi thiếu `id` / `full_text`; dòng JSON hỏng → dừng và báo số dòng.
@@ -298,6 +306,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 - `eval_rag.py --agent`: chạy `AgentService`, lưu vết chạy và chỉ số hành vi gọi tool; `--resume` chạy tiếp từ `<out>.partial.jsonl` khi bị ngắt.
 - Câu có trường `profile` chạy kèm hồ sơ; `must_mention` / `must_not_mention` chấm thành `profile_ok` (`--types profile` để chỉ chạy nhóm này).
 - Câu có `expect_facility` chấm lời gọi `find_healthcare_facility` thành `facility_ok` (`--types facility`).
+- Langfuse bật thì mỗi câu là một trace `eval <id>` (luôn gửi đủ nội dung), cả lần chạy chung session, các chỉ số gắn thành score ([../docs/OBSERVABILITY.md](../docs/OBSERVABILITY.md)).
 
 ## Vì sao tách theo layer như vậy?
 

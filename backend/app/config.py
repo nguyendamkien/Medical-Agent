@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,7 +53,23 @@ class Settings(BaseSettings):
     # Đăng nhập (app/security.py). JWT_SECRET bắt buộc, chỉ để trong .env.
     jwt_secret: str = ""
     jwt_expire_days: int = 7
-    
+
+    # Trace lên Langfuse Cloud (app/observability.py, docs/OBSERVABILITY.md). Tắt mặc định; bật mà
+    # thiếu key thì vẫn coi như tắt. Trace gửi ra máy chủ Langfuse, nên mặc định CHE nội dung câu hỏi,
+    # hồ sơ, tài liệu, câu trả lời — chỉ gửi tên bước, tool, thời gian, token. Trace của eval (câu hỏi
+    # mẫu, không phải dữ liệu người dùng thật) luôn gửi đủ nội dung.
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    # Vùng EU; vùng US: https://us.cloud.langfuse.com. Đọc từ LANGFUSE_BASE_URL (tên trong đoạn cấu hình
+    # mẫu của Langfuse) hoặc LANGFUSE_HOST (tên cũ của SDK).
+    langfuse_base_url: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("langfuse_base_url", "langfuse_host"),
+    )
+    langfuse_mask_content: bool = True
+    langfuse_environment: str = "development"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @property

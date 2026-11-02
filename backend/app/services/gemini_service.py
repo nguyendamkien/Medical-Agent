@@ -1,5 +1,6 @@
 """ dịch vụ Gemini: giao tiếp với mô hình ngôn ngữ Gemini để trả lời câu hỏi y tế """
 from collections.abc import Iterator
+from typing import Any
 
 import google.generativeai as genai
 from google.api_core import retry as api_retry
@@ -140,14 +141,17 @@ class GeminiService:
             system_instruction=AGENT_INSTRUCTION,
         )
 
-    def ask(self, message: str, history: list[ChatMessage]) -> str:
+    def ask(self, message: str, history: list[ChatMessage], usage: dict | None = None) -> str:
+        """`usage`: dict truyền vào sẽ được điền số token (để ghi trace, app/observability.py)."""
         response = self._start_chat(history).send_message(message, request_options=REQUEST_OPTIONS)
+        record_usage(usage, response)
         return response.text
 
-    def ask_stream(self, message: str, history: list[ChatMessage]) -> Iterator[str]:
+    def ask_stream(self, message: str, history: list[ChatMessage], usage: dict | None = None) -> Iterator[str]:
         """Như ask(), nhưng trả từng đoạn text ngay khi Gemini sinh ra."""
         response = self._start_chat(history).send_message(message, stream=True, request_options=REQUEST_OPTIONS)
         for chunk in response:
+            record_usage(usage, chunk)  # chunk sau mang số đếm đầy đủ hơn, ghi đè
             # Chunk cuối có thể chỉ mang finish_reason, không có text.
             if chunk.parts and chunk.text:
                 yield chunk.text
@@ -156,7 +160,12 @@ class GeminiService:
         return self._model.start_chat(history=to_contents(history))
 
     def agent_turn(
-        self, contents: list, tools: dict, allow_tools: bool = True, extra_instruction: str = ""
+        self,
+        contents: list,
+        tools: dict,
+        allow_tools: bool = True,
+        extra_instruction: str = "",
+        usage: dict | None = None,
     ) -> Iterator:
         """Một vòng của agent: gửi `contents` (lịch sử + câu hỏi + các lời gọi / kết quả tool đã
         có), trả từng Part ngay khi Gemini sinh ra — Part có `function_call.name` là lời gọi tool,
@@ -166,7 +175,9 @@ class GeminiService:
         trả lời bằng những gì đã có.
 
         `extra_instruction`: thêm vào cuối AGENT_INSTRUCTION cho riêng request này (khối hồ sơ người
-        hỏi, app/rag/profile.py). Tạo GenerativeModel chỉ là tạo object, không gọi mạng."""
+        hỏi, app/rag/profile.py). Tạo GenerativeModel chỉ là tạo object, không gọi mạng.
+
+        `usage`: dict truyền vào sẽ được điền số token của lần gọi này (để ghi trace)."""
         model = self._agent
         if extra_instruction:
             model = genai.GenerativeModel(
@@ -179,11 +190,12 @@ class GeminiService:
             request_options=REQUEST_OPTIONS,
         )
         for chunk in response:
+            record_usage(usage, chunk)
             if not chunk.candidates:
                 continue
             yield from chunk.candidates[0].content.parts
 
-    def rewrite_query(self, message: str, history: list[ChatMessage]) -> str:
+    def rewrite_query(self, message: str, history: list[ChatMessage], usage: dict | None = None) -> str:
         """Viết lại câu hỏi nối tiếp thành câu độc lập dựa trên lịch sử (dùng để retrieve)."""
         lines = []
         for item in history:
@@ -196,11 +208,25 @@ class GeminiService:
             "LỊCH SỬ:\n" + "\n".join(lines)
             + f"\n\nCÂU HỎI MỚI: {message}\n\nCÂU HỎI VIẾT LẠI:"
         )
-        return self._rewriter.generate_content(prompt, request_options=REQUEST_OPTIONS).text
+        response = self._rewriter.generate_content(prompt, request_options=REQUEST_OPTIONS)
+        record_usage(usage, response)
+        return response.text
 
 
 def to_contents(history: list[ChatMessage]) -> list[dict]:
     return [{"role": item.role, "parts": [item.content]} for item in history]
+
+
+def record_usage(usage: dict | None, response: Any) -> None:
+    """Chép số token từ `usage_metadata` của Gemini sang `usage` theo tên Langfuse dùng
+    (input / output / total). Response không có số đếm thì giữ nguyên."""
+    meta = getattr(response, "usage_metadata", None)
+    if usage is None or meta is None:
+        return
+    for key, field in (("input", "prompt_token_count"), ("output", "candidates_token_count"), ("total", "total_token_count")):
+        value = getattr(meta, field, 0)
+        if value:
+            usage[key] = int(value)
 
 
 _service: GeminiService | None = None

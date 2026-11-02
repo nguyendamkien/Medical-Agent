@@ -11,6 +11,7 @@ pydantic-settings==2.5.2
 
 # --- LLM (Google Gemini) ---
 google-generativeai==0.8.3
+langfuse==5.1.0
 
 # --- Embedding (OpenAI) ---
 openai>=1.40

@@ -39,6 +39,7 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
 - [docs/AUTH_CHAT_HISTORY.md](docs/AUTH_CHAT_HISTORY.md): đăng ký / đăng nhập (JWT) và lưu lịch sử chat bằng PostgreSQL. Ghi lại những gì đã làm, các bước cài đặt, thao tác thường dùng và cách xử lý lỗi.
 - [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md): hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) đưa vào prompt để agent tìm đúng tài liệu và cảnh báo dị ứng.
 - [docs/FACILITIES.md](docs/FACILITIES.md): gợi ý bệnh viện ở Hà Nội theo chuyên khoa (tool `find_healthcare_facility`), dữ liệu kiểm tra trên trang chính thức. Đi qua code từng bước: [docs/FACILITIES_WALKTHROUGH.md](docs/FACILITIES_WALKTHROUGH.md).
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): xem trace từng câu hỏi (lời gọi Gemini, tool, thời gian, token) và trace của eval bằng Langfuse Cloud; mặc định che nội dung.
 - [backend/STRUCTURE.md](backend/STRUCTURE.md): cấu trúc code backend và luồng xử lý một request.
 - [frontend/STRUCTURE.md](frontend/STRUCTURE.md): cấu trúc code frontend, luồng đăng nhập và gửi tin nhắn.
 - [data-collection/README.md](data-collection/README.md): crawler, nguồn dữ liệu, bản quyền.
@@ -164,6 +165,9 @@ Chi tiết và kết quả: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
 | `DATABASE_URL`      | `postgresql+pg8000://medical:medical@localhost:5432/medical_agent` | PostgreSQL lưu tài khoản và lịch sử chat. Dùng driver `pg8000` (thuần Python) vì Windows có thể chặn DLL của `psycopg` |
 | `JWT_SECRET`        | *(bắt buộc)*                                   | Khóa ký token đăng nhập. Đổi khóa thì mọi người dùng phải đăng nhập lại        |
 | `JWT_EXPIRE_DAYS`   | `7`                                              | Số ngày token còn hiệu lực, hết hạn thì phải đăng nhập lại                     |
+| `LANGFUSE_ENABLED` | `false` | Gửi trace lên Langfuse Cloud ([docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)). Cần thêm `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Vùng EU; project ở vùng US thì dùng `https://us.cloud.langfuse.com`. Tên cũ `LANGFUSE_HOST` vẫn đọc được |
+| `LANGFUSE_MASK_CONTENT` | `true` | Che câu hỏi, hồ sơ, tài liệu, câu trả lời trong trace (chỉ gửi tên bước, thời gian, token). Trace của eval luôn gửi đủ nội dung |
 
 Các biến còn lại (`RAG_MIN_SCORE`, `RAG_CANDIDATES`, `RRF_K`, `RERANK_*`): xem mục "Cấu hình liên quan" trong [docs/RAG.md](docs/RAG.md).
 
@@ -279,6 +283,7 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 │   │   ├── db.py                 # Kết nối PostgreSQL (SQLAlchemy engine, session)
 │   │   ├── models.py             # Bảng users, conversations, messages, health_profiles
 │   │   ├── security.py           # Băm mật khẩu (argon2), JWT, get_current_user
+│   │   ├── observability.py      # Trace lên Langfuse (tắt mặc định, che nội dung)
 │   │   ├── routers/
 │   │   │   ├── auth.py           # Đăng ký, đăng nhập, /me
 │   │   │   ├── conversations.py  # Danh sách / tin nhắn / đổi tên / xoá hội thoại
@@ -308,7 +313,7 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 │       ├── golden_set.jsonl      # 108 câu hỏi chuẩn
 │       ├── eval_retrieval.py     # Đo retrieval
 │       └── eval_rag.py           # Chấm end-to-end bằng LLM giám khảo
-├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md, FACILITIES.md, FACILITIES_WALKTHROUGH.md
+├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md, FACILITIES.md, FACILITIES_WALKTHROUGH.md, OBSERVABILITY.md
 ├── frontend/
 │   └── src/
 │       ├── App.jsx               # Đăng nhập, danh sách hội thoại, gửi tin nhắn
@@ -335,6 +340,7 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 
 - Lịch sử chat là dữ liệu sức khỏe nhạy cảm, nên được lưu theo tài khoản trong PostgreSQL. Mỗi user chỉ đọc được hội thoại của mình, và có thể xóa từng hội thoại.
 - Hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) do user tự khai, không ghi vào log, xóa được bất cứ lúc nào. Khi user bật "dùng trong chat", hồ sơ được gửi cho Gemini kèm mỗi câu hỏi.
+- Trace (Langfuse Cloud, tắt mặc định) gửi ra máy chủ của Langfuse. Mặc định chỉ gửi tên bước, thời gian, token và id user dạng UUID; câu hỏi, hồ sơ và câu trả lời bị che. Không đặt `LANGFUSE_MASK_CONTENT=false` khi có người dùng thật.
 - Mật khẩu chỉ lưu dạng băm argon2. Token đăng nhập (JWT) được ký bằng `JWT_SECRET` và chỉ chứa id user.
 - `backend/.env` (API key, `JWT_SECRET`) không được commit. Mật khẩu PostgreSQL trong `docker-compose.yml` chỉ dùng khi dev trên máy, phải đổi trước khi deploy.
 
