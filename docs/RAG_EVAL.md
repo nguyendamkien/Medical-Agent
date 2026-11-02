@@ -203,14 +203,17 @@ Giám khảo là LLM nên điểm dao động nhỏ giữa các lần chạy; so
 
 ### Kết quả
 
-**Lần đo 01/11/2026 — câu `profile` và `facility`, agent, tuần tự.** Chỉ chạy hai nhóm câu mới (88 câu cũ chưa chạy lại sau khi thêm hồ sơ và tool gợi ý nơi khám).
+**Lần đo 01/11/2026 — câu mới `profile`, `facility` và 23 câu cũ (hồi quy), agent, tuần tự.** Chưa chạy lại đủ 108 câu sau khi thêm hồ sơ và tool gợi ý nơi khám.
 
 | Nhóm | n | context_precision | context_recall | faithfulness | answer_relevancy | Hành vi |
 |---|---|---|---|---|---|---|
 | `profile` | 12 | 0,97 | 0,91 | 1,00 | 0,97 | `profile_ok` 11/12; `profile-05` (mang thai) đã sửa prompt và chạy lại: recall 0 → 1 |
 | `facility` (lần 2) | 8 | — | — | — | — | `facility_ok` 8/8, `profile_ok` 7/7, không số điện thoại tự bịa |
+| Hồi quy: `safety`, `no_search`, `off_topic`, `out_of_kb`, `follow_up` | 23 | 1,00 | 0,85 | 1,00 | 1,00 | 19/23 câu giữ nguyên hoặc tốt hơn so với 21/10; 0 liều thuốc; `safety-04` tụt recall 1 → 0 (tìm 1 lần không ra thì bỏ cuộc) |
 
-Chi tiết: [HEALTH_PROFILE.md](HEALTH_PROFILE.md) và [FACILITIES.md](FACILITIES.md) mục "Kết quả"; từng câu trong `backend/eval/results_agent_profile.json`, `results_agent_facility.json`.
+Phân tích 3 vấn đề tìm được trong lần hồi quy: [AGENT_SUMMARY.md](AGENT_SUMMARY.md) mục "Kiểm tra hồi quy".
+
+Chi tiết: [HEALTH_PROFILE.md](HEALTH_PROFILE.md) và [FACILITIES.md](FACILITIES.md) mục "Kết quả"; từng câu trong `backend/eval/results_agent_profile.json`, `results_agent_facility.json`, `results_agent_regression_1101.json`.
 
 **Lần đo 20/10/2026 — 88 câu, pipeline cố định và agent, tuần tự (`--workers 1`).** Pipeline cố định: context_precision 0,98, context_recall 0,98, faithfulness 1,00, answer_relevancy 1,00, thời gian trung vị 19 s; chỉ `multi-01` bị gắn cờ (faithfulness 0,67). Agent: 0,96 / 0,96 / 1,00 / 1,00, 24 s — tốt hơn ở `multi_doc`, kém ở `safety`. Bảng theo loại câu, hành vi agent, đọc tay câu an toàn và kết luận: [AGENTIC_RAG.md](AGENTIC_RAG.md) "Kết quả bước 4". Chi tiết từng câu: `backend/eval/results_rag_88.json`, `backend/eval/results_agent_88.json`.
 
