@@ -40,6 +40,7 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
 - [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md): hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) đưa vào prompt để agent tìm đúng tài liệu và cảnh báo dị ứng.
 - [docs/FACILITIES.md](docs/FACILITIES.md): gợi ý bệnh viện ở Hà Nội theo chuyên khoa (tool `find_healthcare_facility`), dữ liệu kiểm tra trên trang chính thức. Đi qua code từng bước: [docs/FACILITIES_WALKTHROUGH.md](docs/FACILITIES_WALKTHROUGH.md).
 - [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): xem trace từng câu hỏi (lời gọi Gemini, tool, thời gian, token) và trace của eval bằng Langfuse Cloud; mặc định che nội dung.
+- [docs/DOCKER.md](docs/DOCKER.md): chạy demo toàn bộ app (DB, backend, frontend) bằng Docker trên một máy: `docker compose --profile app up -d --build` rồi mở http://localhost:3000.
 - [backend/STRUCTURE.md](backend/STRUCTURE.md): cấu trúc code backend và luồng xử lý một request.
 - [frontend/STRUCTURE.md](frontend/STRUCTURE.md): cấu trúc code frontend, luồng đăng nhập và gửi tin nhắn.
 - [data-collection/README.md](data-collection/README.md): crawler, nguồn dữ liệu, bản quyền.
@@ -270,8 +271,9 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 
 ```
 .
-├── docker-compose.yml            # PostgreSQL 16 + Adminer
+├── docker-compose.yml            # PostgreSQL 16 + Adminer; profile "app" thêm backend + frontend (docs/DOCKER.md)
 ├── backend/
+│   ├── Dockerfile, .dockerignore # Image backend (docs/DOCKER.md)
 │   ├── main.py                   # Khởi tạo FastAPI + CORS, gắn router auth / conversations / chat / profile / facilities
 │   ├── requirements.txt
 │   ├── .env.example
@@ -315,6 +317,7 @@ Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc u
 │       └── eval_rag.py           # Chấm end-to-end bằng LLM giám khảo
 ├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md, FACILITIES.md, FACILITIES_WALKTHROUGH.md, OBSERVABILITY.md
 ├── frontend/
+│   ├── Dockerfile, nginx.conf    # Image frontend: build Vite + nginx chuyển /api sang backend (docs/DOCKER.md)
 │   └── src/
 │       ├── App.jsx               # Đăng nhập, danh sách hội thoại, gửi tin nhắn
 │       ├── api/chatApi.js        # Gọi backend (gắn token, xử lý 401)

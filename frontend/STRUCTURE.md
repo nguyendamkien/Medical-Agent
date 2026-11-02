@@ -100,7 +100,7 @@ Giữ toàn bộ **state chính**:
 Các hàm chính: `handleSend`, `handleSelect`, `handleNew`, `handleRename` (dùng `window.prompt`), `handleDelete` (hỏi xác nhận), `handleLoggedIn`, `handleLogout`, `handleSaveProfile`, `handleDeleteProfile`.
 
 ### `src/api/chatApi.js`
-Nơi **duy nhất** gọi ra backend. Đọc `API_BASE_URL` từ `VITE_API_BASE_URL` (mặc định `http://localhost:8000`).
+Nơi **duy nhất** gọi ra backend. Đọc `API_BASE_URL` từ `VITE_API_BASE_URL` (không đặt thì mặc định `http://localhost:8000`; đặt chuỗi rỗng thì gọi cùng địa chỉ với trang, như bản Docker, xem [docs/DOCKER.md](../docs/DOCKER.md)).
 - `apiFetch()`: tự gắn `Authorization: Bearer <token>`. Lỗi HTTP thì ném `Error` với `detail` của backend; lỗi 422 được dịch sang tiếng Việt. Gặp 401 khi có token thì xóa token và phát `auth:logout`. Không tới được máy chủ thì báo "Không kết nối được máy chủ".
 - Auth: `register`, `login` (lưu token), `fetchMe`, `getToken`, `clearToken`.
 - Hội thoại: `listConversations`, `listMessages`, `renameConversation`, `deleteConversation`.
