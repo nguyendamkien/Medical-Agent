@@ -1,4 +1,5 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+// Chuỗi rỗng = gọi cùng địa chỉ với trang (bản Docker: nginx chuyển /api sang backend)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 // ---------- Token đăng nhập ----------
 // Token (JWT) nhận được khi đăng nhập, lưu trong localStorage để tải lại trang vẫn còn đăng nhập.

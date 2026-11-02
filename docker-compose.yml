@@ -1,8 +1,53 @@
 # PostgreSQL lưu user + lịch sử chat, kèm Adminer để xem dữ liệu.
 # Chạy: docker compose up -d   |   Xem DB: http://localhost:8080 (Server: db)
-# Mật khẩu dưới đây chỉ dùng khi dev trên máy — đổi trước khi deploy.
+# Chạy cả app (backend + frontend) trong Docker để demo: xem docs/DOCKER.md
+#   docker compose --profile app up -d --build   →   http://localhost:3000
+# Mật khẩu dưới đây chỉ dùng khi dev / demo trên máy — đổi trước khi deploy.
 
 services:
+  backend:
+    build: ./backend
+    container_name: medical-backend
+    profiles: ["app"]
+    restart: unless-stopped
+    env_file: ./backend/.env          # API key, JWT_SECRET... (không nằm trong image)
+    environment:
+      # Ghi đè các giá trị trong .env vốn dành cho lúc chạy trực tiếp trên Windows
+      DATABASE_URL: postgresql+pg8000://medical:medical@db:5432/medical_agent
+      VECTOR_DB_PATH: app/storage/chroma
+      DATA_PATH: /data/benh_pho_bien_10.jsonl
+      # 3000 = frontend Docker; 5173 = khi chạy frontend bằng npm run dev trỏ vào backend này
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173
+      # Tải model qua HTTP thường: giao thức Xet có thể treo trong container
+      HF_HUB_DISABLE_XET: "1"
+    ports:
+      - "8000:8000"                   # Swagger: http://localhost:8000/docs
+    volumes:
+      # Dùng chung Chroma index với lúc chạy trên Windows. Không chạy 2 backend cùng lúc.
+      - ./backend/app/storage:/app/app/storage
+      - ./data-collection/data:/data:ro   # chỉ dùng khi ingest
+      - hf-cache:/hf-cache                # model rerank, tải 1 lần
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build: ./frontend
+    container_name: medical-frontend
+    profiles: ["app"]
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   db:
     image: postgres:16
     container_name: medical-db
@@ -35,3 +80,4 @@ services:
 
 volumes:
   pgdata:
+  hf-cache:

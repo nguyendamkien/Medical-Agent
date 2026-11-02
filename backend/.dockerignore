@@ -1,0 +1,11 @@
+venv/
+.venv/
+.env
+__pycache__/
+**/__pycache__/
+*.pyc
+storage/
+app/storage/
+eval/results*
+Dockerfile
+.dockerignore
