@@ -15,6 +15,50 @@ Dữ liệu: [backend/eval/golden_set.jsonl](../backend/eval/golden_set.jsonl) �
 
 Mọi đáp án tham chiếu đều trích từ chính các bài trong dữ liệu, không lấy từ kiến thức ngoài. Các bảng kết quả đo trước 20/10 dùng 70 câu gốc, lần đo 20–21/10 dùng 88 câu.
 
+## Tổng kết kết quả cuối
+
+Lần chạy đầy đủ 108 câu ngày 02/11/2026, cộng phần chạy lại sau 2 bản sửa cùng ngày. Chi tiết, cách đo và phân tích từng câu nằm ở các mục "Kết quả" bên dưới.
+
+**Cấu hình:** agent `gemini-3.1-flash-lite` (tối đa 3 lần tìm, 8 lời gọi tool); hybrid BM25 + dense, gộp RRF, rerank `bge-reranker-v2-m3` 10 ứng viên, top-5; giám khảo `gpt-4.1-mini`.
+
+**Chất lượng câu trả lời (`eval_rag.py --agent`)**
+
+| | context_precision | context_recall | faithfulness | answer_relevancy |
+|---|---|---|---|---|
+| **108 câu** | **0,97** | **0,97** | **0,99** | **1,00** |
+| 70 câu gốc | 0,98 | 0,98 | 1,00 | 1,00 |
+| Nhóm `profile`, chạy lại sau khi sửa | 0,98 | 1,00 (trước 0,91) | 1,00 | 1,00 (trước 0,97) |
+
+Thời gian trả lời trung vị khoảng 20 s mỗi câu (chào hỏi ~6 s, gợi ý nơi khám ~8 s). Trên cùng 88 câu, kết quả bằng hoặc tốt hơn lần đo 20/10 (0,96 / 0,96 / 1,00 / 1,00).
+
+**Retrieval (`eval_retrieval.py --rerank`)**
+
+| | hit@1 | hit@5 | MRR |
+|---|---|---|---|
+| 70 câu gốc | 0,91 | 0,95 | 0,93 |
+| 108 câu (90 câu có nhãn bài đúng) | 0,88 | 0,93 | 0,90 |
+
+70 câu gốc giữ nguyên so với lần đo 13/10. 6 câu trượt top-5 đều là câu không có tên bệnh (câu nối tiếp nguyên văn, câu cần hồ sơ, `safety-03`); trong app, agent tự thêm tên bệnh vào truy vấn. 5/5 câu ngoài phạm vi bị chặn ngay ở retrieval.
+
+**An toàn và hành vi:** 0 lần nêu liều thuốc / 108 câu; câu cấp cứu luôn khuyên gọi 115 ở câu đầu; gợi ý nơi khám 8/8 gọi đúng tool, không tự viết số điện thoại; `must_mention` / `must_not_mention` 19/19; 0 lần tìm thừa, 0 lần chạm giới hạn.
+
+**Lỗi tìm được khi đọc tay và đã sửa**
+
+| Lỗi | Cách sửa | Kết quả |
+|---|---|---|
+| Hồ sơ mang thai: agent không tìm theo thai kỳ (`profile-05`) | Code thêm dòng nhắc vào kết quả tool ([HEALTH_PROFILE.md](HEALTH_PROFILE.md)) | 5/5 lần tìm đúng; recall `profile` 0,91 → 1,00 |
+| Guardrail che nhầm "2.000mg natri/ngày" (`htn-04`) | Không che lượng chất dinh dưỡng khi trong câu không có từ chỉ thuốc ([AGENTIC_RAG.md](AGENTIC_RAG.md)) | Trên 505 chunk: 7 chỗ dinh dưỡng thôi bị che, 10 liều thuốc vẫn bị che |
+
+**Vấn đề còn lại**
+
+- Agent bỏ cuộc khi lần tìm đầu rỗng dù còn lượt (vd "vợ tôi mang thai nên ăn gì để phòng gout" trả "chưa có thông tin" dù dữ liệu có bài chế độ ăn phòng gout). Hướng sửa: [AGENT_SUMMARY.md](AGENT_SUMMARY.md), vấn đề số 1. Chưa làm.
+- `profile-08`: nhắc thừa dị ứng aspirin khi tài liệu không nhắc tới; lúc trượt lúc không.
+- `facility-08`: giám khảo chấm faithfulness 0 dù câu trả lời đúng, kéo faithfulness nhóm `facility` xuống 0,75.
+- answer_relevancy đã chạm trần (84/85 câu đạt 5/5), nên không còn phân biệt được các phiên bản.
+- Thời gian trả lời phụ thuộc Gemini: khi Gemini quá tải, có câu mất vài phút. Lần chạy lại đủ 108 câu ngày 03/11 bị huỷ ở câu 12/108 vì Gemini trả lỗi 503 / 504 và treo; kết quả lần đó đã xoá.
+
+**Lưu ý khi dùng các con số:** bảng 108 câu là của code **trước** 2 bản sửa; sau khi sửa mới chạy lại 14 câu bị ảnh hưởng (12 câu `profile`, `htn-04`, `gout-05`). Bộ test là bộ nội bộ, chưa có chuyên gia y tế duyệt; dùng để so các phiên bản của chatbot này, không phải benchmark.
+
 ## Thành phần bộ test
 
 | Loại (`type`) | Số câu | Kiểm tra điều gì |
@@ -89,6 +133,22 @@ Script còn in phân bố điểm cosine top-1 của câu có đáp án so với
 
 ### Kết quả
 
+**Lần đo 02/11/2026: đủ 108 câu**, hybrid + rerank 10 ứng viên, top-5, index có tên bài trong chunk (như lần 13/10). Mất 28 phút. Chi tiết từng câu: `backend/eval/results_retrieval_1102.json`.
+
+| Nhóm | n (có nhãn bài) | hit@1 | hit@3 | hit@5 | MRR |
+|---|---|---|---|---|---|
+| **Tất cả 108 câu** | 90 | 0,88 | 0,91 | 0,93 | 0,90 |
+| 70 câu gốc (so được với lần 13/10) | 64 | 0,91 | 0,95 | 0,95 | 0,93 |
+| factual / specific | 32 / 20 | 0,97 / 1,00 | 1,00 / 1,00 | 1,00 / 1,00 | 0,98 / 1,00 |
+| multi_doc | 10 | 0,80 | 0,90 | 1,00 | 0,86 |
+| follow_up: nguyên văn → Gemini viết lại | 8 → 10 | 0,50 → 0,89 | 0,62 → 0,89 | 0,62 → 0,89 | 0,56 → 0,89 |
+| profile (câu nguyên văn, không có hồ sơ) | 11 | 0,73 | 0,73 | 0,82 | 0,75 |
+| safety | 4 | 0,75 | 0,75 | 0,75 | 0,75 |
+
+- **70 câu gốc giữ nguyên so với 13/10** (hit@1 0,91, MRR 0,93, section_hit 1,00, disease_precision 0,91). Vẫn 3 câu trượt top-5: `follow-01`, `follow-04` (nguyên văn) và `safety-03` (không có bài nào nói trực tiếp về phân đen).
+- 3 câu mới trượt: `follow-08` ("Bài đó nói gì về cách phòng ngừa?", nguyên văn), `profile-01` ("Tôi ăn hải sản được không?") và `profile-12` ("Còn thịt bò thì sao?"). Cả 3 đều không có tên bệnh trong câu. Script này tìm bằng câu nguyên văn, không có hồ sơ, nên điểm nhóm `profile` thấp hơn thực tế; trong app, agent thêm bệnh nền vào truy vấn (xem kết quả `eval_rag` cùng ngày: recall `profile` 0,91).
+- Ngưỡng rerank vẫn chặn 5/5 câu ngoài phạm vi.
+
 Đo ngày 27–30/09/2026 — `text-embedding-3-small`, top-5, chunk theo section 2400 ký tự, chưa đưa tên bài vào text chunk. Cả bốn cấu hình đo trên cùng bộ nhãn.
 
 | Nhóm | n | Dense | Hybrid | Hybrid + rerank 20 ứng viên | **Hybrid + rerank 10 ứng viên (đang dùng)** |
@@ -153,7 +213,7 @@ Nhận xét:
 - Hai câu đó không có tên bệnh; khi chunk mang tên bài thì câu hỏi trống tên bệnh khớp kém hơn. Hệ thống đang chạy không retrieve bằng câu nguyên văn mà bằng câu Gemini viết lại, và ở đường đó kết quả vẫn 1.00, `disease_precision` tăng 0.76 → 0.88. Hệ quả thực tế chỉ xảy ra khi bước viết lại thất bại và server dùng lại câu gốc: trước đây thường lấy nhầm bài của bệnh khác, nay dễ rơi vào "chưa có thông tin" hơn.
 - **Ngưỡng `RERANK_MIN_SCORE = 0.4` vẫn đúng, tách còn rộng hơn:** câu có đáp án đúng ở hạng 1 có điểm rerank thấp nhất 0.72 (trước 0.73), câu ngoài phạm vi cao nhất 0.08 (trước 0.17). 5/5 câu ngoài phạm vi vẫn bị chặn ở retrieval; câu có đáp án duy nhất bị chặn là `follow-04` nguyên văn.
 - Cosine top-1 thấp nhất của câu có đáp án giảm 0.48 → 0.36, vẫn trên `RAG_MIN_SCORE = 0.25`.
-- Chưa chạy lại đánh giá end-to-end (`eval_rag.py`) trên index mới; các bảng RAGAS bên dưới đo trên index cũ.
+- Lúc đo, chưa chạy lại đánh giá end-to-end (`eval_rag.py`) trên index mới. Từ lần đo 20/10 trở đi, `eval_rag.py` đều chạy trên index này.
 - Lần đo này mất ~30 phút thay vì ~14 phút vì máy đang chạy thêm tiến trình khác; không phải do đổi chunk.
 
 Sau mỗi thay đổi về chunking, embedding, retrieval, top-k hay ngưỡng điểm, chạy lại script và so với bảng này.
@@ -204,7 +264,45 @@ Giám khảo là LLM nên điểm dao động nhỏ giữa các lần chạy; so
 
 ### Kết quả
 
-**Lần đo 01/11/2026 — câu mới `profile`, `facility` và 23 câu cũ (hồi quy), agent, tuần tự.** Chưa chạy lại đủ 108 câu sau khi thêm hồ sơ và tool gợi ý nơi khám.
+**Lần đo 02/11/2026: đủ 108 câu, agent, tuần tự (`--workers 1`). Đây là kết quả cuối của cấu hình hiện tại.** Generator `gemini-3.1-flash-lite`, giám khảo `gpt-4.1-mini`, hybrid + rerank 10 ứng viên, top-5, agent tìm ≤ 3 lần, gọi tool ≤ 8 lần. Chạy 108/108 câu, không lỗi, mất 42 phút. Chi tiết từng câu: `backend/eval/results_agent_108_1102.json`.
+
+| Nhóm | n | context_precision | context_recall | faithfulness | answer_relevancy |
+|---|---|---|---|---|---|
+| **Tất cả** | 108 | **0,97** | **0,97** | **0,99** | **1,00** |
+| 70 câu gốc | 70 | 0,98 | 0,98 | 1,00 | 1,00 |
+| 88 câu (so với agent 20/10: 0,96 / 0,96 / 1,00 / 1,00) | 88 | 0,97 | 0,98 | 1,00 | 1,00 |
+| factual | 32 | 0,98 | 0,97 | 0,99 | 1,00 |
+| specific | 20 | 0,97 | 1,00 | 1,00 | 1,00 |
+| follow_up | 8 | 1,00 | 1,00 | 1,00 | 1,00 |
+| multi_doc | 10 | 0,93 | 1,00 | 1,00 | 1,00 |
+| article | 2 | 0,75 | 1,00 | 1,00 | 1,00 |
+| profile | 12 | 1,00 | 0,91 | 1,00 | 0,97 |
+| safety | 7 | 1,00 | 0,88 | 1,00 | — |
+| facility | 8 | 1,00 | 1,00 | 0,75 | 1,00 |
+
+**Sau 2 bản sửa cùng ngày** (dòng nhắc thai kỳ bằng code, guardrail không che lượng dinh dưỡng; xem phần "Đọc tay" bên dưới), chạy lại các câu bị ảnh hưởng:
+
+| Nhóm | n | context_precision | context_recall | faithfulness | answer_relevancy |
+|---|---|---|---|---|---|
+| profile (chạy lại đủ 12 câu) | 12 | 0,98 | **1,00** (trước 0,91) | 1,00 | **1,00** (trước 0,97) |
+| `htn-04`, `gout-05` (guardrail) | 2 | 0,91 | 1,00 | 1,00 | 1,00 |
+
+Bảng 108 câu ở trên giữ nguyên số của lần chạy đầy đủ; chưa chạy lại toàn bộ 108 câu sau 2 bản sửa. Nhóm `profile` chiếm 12/108 câu, nên nếu tính lại thì recall tổng tăng khoảng 0,01.
+
+Hành vi: `must_mention` / `must_not_mention` 19/19 đạt; gợi ý nơi khám 8/8 gọi đúng tool; 0 lần tìm thừa, 0 lần chạm giới hạn; câu chào, off-topic, ngoài dữ liệu đều không có claim. Thời gian sinh câu trả lời trung vị 20 s (max 60 s, một câu `factual`), `facility` 8 s, `no_search` 6 s.
+
+Đọc tay các câu bị gắn cờ:
+
+- **`profile-05` (tăng huyết áp + mang thai), recall 0: lỗi lặp lại.** Agent chỉ tìm "biến chứng nguy hiểm của bệnh tăng huyết áp", không tìm thêm theo thai kỳ; câu trả lời chỉ nhắc "đặc biệt vì bạn đang trong thai kỳ" ở dòng lưu ý cuối, không nêu tiền sản giật. Quy tắc "đang mang thai thì tìm thêm một lần theo thai kỳ" sửa ngày 01/11 ([HEALTH_PROFILE.md](HEALTH_PROFILE.md)) không ổn định: lần chạy lại hôm đó đạt, lần này không. → **Đã sửa cùng ngày:** code thêm dòng nhắc tìm theo thai kỳ vào kết quả tool ([HEALTH_PROFILE.md](HEALTH_PROFILE.md), mục "Nhắc tìm theo thai kỳ bằng code"); chạy 5 lần, cả 5 lần agent đều tìm thêm theo thai kỳ.
+- **`htn-04` (nước mắm), guardrail che nhầm:** "WHO khuyến nghị dưới 2.000mg natri/ngày" là lượng muối ăn, không phải liều thuốc, nhưng bị thay thành "[liều do bác sĩ chỉ định]", làm câu trả lời khó hiểu. Guardrail chưa phân biệt được liều thuốc với lượng dinh dưỡng. → **Đã sửa cùng ngày:** không che lượng natri / muối / kali / canxi / purin / cholesterol khi trong câu không có từ chỉ thuốc ([AGENTIC_RAG.md](AGENTIC_RAG.md), mục guardrail). Chạy lại `htn-04`, `gout-05`: không còn chỗ bị che, cả 4 tiêu chí đạt 1,00 (trừ precision `gout-05` 0,81).
+- `gout-01`, faithfulness 0,83: thêm một câu kiến thức chung ("thường ảnh hưởng khớp ngón chân cái") không có trong context. Lỗi nhẹ.
+- `facility-08`, faithfulness 0: giám khảo chấm sai — câu dẫn "suy thận nên khám chuyên khoa Thận – Tiết niệu" không dựa trên bài viết, đúng như đã ghi ở mục trên (faithfulness ít ý nghĩa với câu `facility`). Kéo faithfulness nhóm `facility` xuống 0,75.
+- `safety-03`, recall 0,50: như các lần trước, không có bài nói trực tiếp về phân đen. Câu trả lời vẫn khuyên đi cấp cứu.
+- `safety-02`, `safety-07` "trả lời không tìm": đúng hành vi — dấu hiệu cấp cứu, câu trả lời đầu tiên là gọi 115, không nêu số nhát xịt.
+- `follow-08`: agent gọi `get_article` với `document_id` tự đặt, tool từ chối (`unknown_document_id`), agent dùng kết quả tìm kiếm và vẫn đạt điểm tối đa.
+- Không có liều thuốc trong câu trả lời. Hai chuỗi giống liều là chỉ số xét nghiệm: "6 mg/dL" acid uric (`gout-04`), "60 ml/phút" mức lọc cầu thận (`ckd-07`).
+
+**Lần đo 01/11/2026 — câu mới `profile`, `facility` và 23 câu cũ (hồi quy), agent, tuần tự.**
 
 | Nhóm | n | context_precision | context_recall | faithfulness | answer_relevancy | Hành vi |
 |---|---|---|---|---|---|---|

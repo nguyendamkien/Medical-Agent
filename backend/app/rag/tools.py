@@ -20,11 +20,12 @@ ToolSession giữ trạng thái của MỘT request, những việc không giao 
 """
 
 import logging
+import re
 import time
 from typing import Any
 
 from app.config import get_settings
-from app.rag.profile import allergy_notes
+from app.rag.profile import allergy_notes, normalize
 from app.rag.prompt import format_chunk, source_key
 from app.rag.retriever import Retriever
 from app.services.facility_service import SPECIALTIES, facility_card, search_facilities
@@ -53,6 +54,22 @@ DOSE_REMINDER = (
 	"(Nhắc khi trả lời: KHÔNG nêu liều dùng thuốc — hàm lượng mg/g/ml/viên/nhát, số lần mỗi ngày, "
 	"thời gian dùng, kể cả khi đoạn tài liệu trên có ghi và kể cả \"ví dụ\" hay đặt trong ngoặc. Được "
 	"nêu tên thuốc / nhóm thuốc và lưu ý chung; liều do bác sĩ chỉ định.)"
+)
+# Cuối kết quả search_medical_docs khi hồ sơ ghi đang mang thai mà chưa lần tìm nào theo thai kỳ.
+# Quy tắc này đã có trong profile_instruction, nhưng chỉ nằm trong system instruction thì agent
+# lúc làm lúc không (eval 02/11/2026: profile-05 chỉ tìm "biến chứng tăng huyết áp", recall 0).
+PREGNANCY_REMINDER = (
+	"(Lưu ý hồ sơ: người hỏi ĐANG MANG THAI. CHỈ khi câu hỏi nói về bệnh / thuốc / triệu chứng của "
+	"CHÍNH người hỏi (có \"tôi\", \"mình\", \"em\"…, vd \"Tôi bị tăng huyết áp có nguy hiểm không?\"): "
+	"trước khi trả lời, gọi search_medical_docs thêm một lần theo thai kỳ, vd \"<bệnh> khi mang thai\", "
+	"và nêu điều tài liệu nói về thai kỳ; không tìm thấy thì khuyên hỏi bác sĩ sản khoa, KHÔNG tự suy "
+	"diễn. Câu hỏi kiến thức chung (\"Bệnh X là gì?\", \"X có triệu chứng gì?\") hoặc hỏi cho người "
+	"khác (\"mẹ tôi…\", \"con tôi…\"): KHÔNG tìm thêm, KHÔNG nhắc thai kỳ.)"
+)
+# Truy vấn đã chứa một trong các cụm này (so sau khi bỏ dấu) thì coi như đã tìm theo thai kỳ.
+# Không dùng "thai" đơn lẻ: bỏ dấu thì "đào thải" cũng thành "dao thai".
+PREGNANCY_QUERY = re.compile(
+	r"\b(?:mang thai|co thai|thai ky|thai nhi|thai phu|mang bau|ba bau|co bau|san phu|tien san giat|san giat)\b"
 )
 NO_NEW_RESULTS = (
 	"Không có đoạn tài liệu MỚI nào phù hợp với truy vấn này, ngoài các đoạn đã có trong kết quả "
@@ -157,10 +174,14 @@ def tool_declarations(disease_groups: list[str]) -> dict[str, Any]:
 class ToolSession:
 	"""Trạng thái tool của một request."""
 
-	def __init__(self, retriever: Retriever, allergies: list[str] | None = None) -> None:
+	def __init__(self, retriever: Retriever, allergies: list[str] | None = None, pregnant: bool = False) -> None:
 		self._retriever = retriever
 		self._allergies = allergies or []  # thuốc người dùng ghi dị ứng trong hồ sơ
 		self._allergy_hits = 0
+		self._pregnant = pregnant  # hồ sơ ghi đang mang thai → nhắc tìm theo thai kỳ (PREGNANCY_REMINDER)
+		self._pregnancy_searched = False
+		self._pregnancy_note_sent = False  # cả request
+		self._pregnancy_reminded = False  # lần gọi tool hiện tại (ghi vào trace)
 		self.results: list[dict] = []  # mọi chunk đã trả cho model, theo thứ tự đánh số
 		self.trace: list[dict] = []  # vết chạy: mỗi lần gọi tool một dòng
 		self._numbers: dict[str, int] = {}  # source_key → số [Nguồn i]
@@ -184,6 +205,7 @@ class ToolSession:
 		entry: dict[str, Any] = {"tool": name, "args": args}
 		self._partial_sections = 0
 		self._allergy_hits = 0
+		self._pregnancy_reminded = False
 		try:
 			if name == "search_medical_docs":
 				output = self._search(str(args.get("query") or "").strip(), args.get("disease_group") or None)
@@ -205,6 +227,8 @@ class ToolSession:
 			entry["partial_sections"] = self._partial_sections  # số mục được gợi ý đọc tiếp bằng get_article
 		if self._allergy_hits:
 			entry["allergy_hits"] = self._allergy_hits  # số thuốc dị ứng được nhắc cảnh báo
+		if self._pregnancy_reminded:
+			entry["pregnancy_reminder"] = True
 		entry["seconds"] = round(time.perf_counter() - started, 2)
 		self.trace.append(entry)
 		logger.info("Tool %s(%s) → %d chunk, %.1f s", name, args, entry["n_chunks"], entry["seconds"])
@@ -251,14 +275,16 @@ class ToolSession:
 			settings.agent_followup_rerank_candidates if self.searches else settings.rerank_candidates
 		)
 		self.searches += 1
+		if PREGNANCY_QUERY.search(normalize(query)):
+			self._pregnancy_searched = True
 		fresh = self._retriever.search(
 			query, disease_group=disease_group, exclude_ids=self._seen_chunk_ids, rerank_candidates=rerank_candidates
 		)
+		pregnancy = self._pregnancy_note()
 		if not fresh:
-			if self._seen_chunk_ids:
-				# Có thể đoạn phù hợp nhất đã được gửi ở lần trước nên không còn đoạn MỚI nào đủ điểm.
-				return NO_NEW_RESULTS
-			return NO_RESULTS
+			# Có thể đoạn phù hợp nhất đã được gửi ở lần trước nên không còn đoạn MỚI nào đủ điểm.
+			empty = NO_NEW_RESULTS if self._seen_chunk_ids else NO_RESULTS
+			return "\n\n".join([empty] + pregnancy)
 		blocks = []
 		for result in fresh:
 			self._seen_chunk_ids.add(result["id"])
@@ -273,7 +299,18 @@ class ToolSession:
 			blocks.append(block)
 		notes = self._partial_section_notes(fresh)
 		self._partial_sections = len(notes)
-		return "\n\n".join(blocks + notes + self._allergy_notes(fresh) + [DOSE_REMINDER])
+		return "\n\n".join(blocks + notes + self._allergy_notes(fresh) + pregnancy + [DOSE_REMINDER])
+
+	def _pregnancy_note(self) -> list[str]:
+		"""PREGNANCY_REMINDER nếu đang mang thai, chưa tìm theo thai kỳ, chưa nhắc và còn lượt tìm.
+		Chỉ nhắc một lần mỗi request: câu hỏi cho người khác thì model đã bỏ qua một lần là đủ."""
+		if not self._pregnant or self._pregnancy_searched or self._pregnancy_note_sent:
+			return []
+		if self.searches >= get_settings().agent_max_tool_calls:
+			return []  # hết lượt tìm: nhắc cũng không tìm thêm được
+		self._pregnancy_reminded = True
+		self._pregnancy_note_sent = True
+		return [PREGNANCY_REMINDER]
 
 	def _allergy_notes(self, results: list[dict]) -> list[str]:
 		notes = allergy_notes(results, self._allergies, self._number)
