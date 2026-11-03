@@ -35,7 +35,7 @@ Số đo ngày 20/10, trước guardrail và quy tắc an toàn: agent chậm h�
 
 | Tính năng | Thay đổi ở agent | Kết quả đo |
 |---|---|---|
-| Hồ sơ sức khỏe ([HEALTH_PROFILE.md](HEALTH_PROFILE.md)) | Hồ sơ đưa vào cuối system instruction ở mọi vòng (không làm tool riêng: thêm 1 vòng Gemini mỗi câu và model có thể quên gọi). Code quét thuốc dị ứng trong kết quả tool, thêm dòng nhắc cảnh báo | 12 câu `profile`: 11/12 đạt, chất lượng 0,97 / 0,91 / 1,00 / 0,97 |
+| Hồ sơ sức khỏe ([HEALTH_PROFILE.md](HEALTH_PROFILE.md)) | Hồ sơ đưa vào cuối system instruction ở mọi vòng (không làm tool riêng: thêm 1 vòng Gemini mỗi câu và model có thể quên gọi). Code quét thuốc dị ứng trong kết quả tool, thêm dòng nhắc cảnh báo | 12 câu `profile`: 11/12 đạt, chất lượng 0,97 / 0,91 / 1,00 / 0,97 (01/11); sau khi thêm dòng nhắc thai kỳ bằng code (02/11): 0,98 / 1,00 / 1,00 / 1,00 |
 | Gợi ý nơi khám ([FACILITIES.md](FACILITIES.md)) | Tool thứ 3 `find_healthcare_facility`: danh sách bệnh viện đi thẳng xuống giao diện thành thẻ, model chỉ nhận số lượng. Chốt chặn "không có tài liệu" dùng `session.has_content`; tool này không tính vào lượt tìm | 8 câu `facility`: 8/8 gọi tool đúng, không số điện thoại tự bịa |
 
 Agent giờ có **3 tool**: `search_medical_docs`, `get_article`, `find_healthcare_facility`.

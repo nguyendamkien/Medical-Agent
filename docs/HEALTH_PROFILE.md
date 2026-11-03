@@ -59,6 +59,31 @@ Giống guardrail liều thuốc: không trông vào việc model tự để ý.
 - `allergy_notes(...)`: mỗi thuốc một dòng nhắc, kèm số `[Nguồn i]` nhắc tới nó. Đặt cuối kết quả tool, trước lời nhắc không nêu liều.
 - Vết chạy agent ghi `allergy_hits` (số thuốc được nhắc) ở lần gọi tool tương ứng.
 
+## Nhắc tìm theo thai kỳ bằng code
+
+Quy tắc "đang mang thai thì tìm thêm một lần theo thai kỳ" nằm trong `profile_instruction`, nhưng chỉ ở đó thì agent lúc làm lúc không (eval 02/11/2026: `profile-05` lại chỉ tìm "biến chứng tăng huyết áp", recall 0). Nên làm như dòng nhắc dị ứng: `ToolSession` (`app/rag/tools.py`) thêm `PREGNANCY_REMINDER` vào cuối kết quả `search_medical_docs`, khi đủ các điều kiện:
+
+- hồ sơ ghi đang mang thai;
+- chưa có truy vấn nào theo thai kỳ trong request. Các cụm được tính là theo thai kỳ: "mang thai", "thai kỳ", "thai nhi", "bà bầu", "tiền sản giật"…, so sau khi bỏ dấu. Không dùng chữ "thai" đơn lẻ, vì "đào thải" bỏ dấu cũng thành "dao thai";
+- chưa nhắc lần nào trong request (chỉ nhắc 1 lần);
+- còn lượt tìm (`AGENT_MAX_TOOL_CALLS`).
+
+Dòng nhắc nói rõ: chỉ tìm thêm khi câu hỏi về chính người hỏi; không áp dụng cho câu hỏi kiến thức chung ("Bệnh X là gì?") hay câu hỏi cho người khác. Vết chạy ghi `pregnancy_reminder: true` ở lần gọi tool có nhắc.
+
+Kiểm tra ngày 02/11/2026 (hồ sơ tăng huyết áp + mang thai, chạy agent thật):
+
+| Câu hỏi | Số lần | Tìm thêm theo thai kỳ |
+|---|---|---|
+| "Tôi bị tăng huyết áp thì có nguy hiểm gì không?" (`profile-05`) | 5 | 5/5, câu trả lời nêu tăng huyết áp thai kỳ |
+| "Tôi hay bị ợ nóng, trào ngược dạ dày thì nên làm gì?" (bệnh không có trong hồ sơ) | 2 | 2/2 |
+| "Mẹ tôi bị tăng huyết áp thì có nguy hiểm gì không?" | 2 | 0/2, không nhắc thai kỳ (đúng) |
+| "Bệnh gout là gì?" | 3 | 0/3, không nhắc thai kỳ (đúng) |
+| "Tăng huyết áp có triệu chứng gì?" | 2 | 0/2. Câu trả lời vẫn nêu dấu hiệu tiền sản giật, vì bài tăng huyết áp thai kỳ tự lên trong kết quả tìm chung và câu hỏi về đúng bệnh nền của người hỏi. Coi là chấp nhận được |
+
+Chạy lại 12 câu `profile` bằng `eval_rag.py --agent`: context_precision 0,98, context_recall 1,00, faithfulness 1,00, answer_relevancy 1,00. Các câu `must_mention` / `must_not_mention` đạt 11/12. Câu trượt là `profile-08` (nhắc dị ứng aspirin thừa), lỗi đã ghi ở trên, lúc trượt lúc không và không liên quan tới thay đổi này vì hồ sơ của câu đó không có thai.
+
+Bản đầu của dòng nhắc chỉ ghi chung chung "không phải kiến thức chung". Với bản đó, "Bệnh gout là gì?" bị tìm thêm theo thai kỳ 2/2 lần; thêm ví dụ cụ thể vào dòng nhắc thì hết.
+
 **Giới hạn:** chỉ khớp đúng tên người dùng ghi. Ghi "NSAID" thì không bắt được đoạn chỉ nhắc "ibuprofen". Muốn bắt theo nhóm thuốc cần thêm bảng đồng nghĩa (chưa làm). Form có dòng hướng dẫn ghi đúng tên thuốc.
 
 ## Dữ liệu và API
@@ -114,7 +139,19 @@ Golden set thêm 12 câu loại `profile` (88 → 100 câu). Mỗi câu có trư
 
 Chạy: `python -m eval.eval_rag --agent --types profile --workers 1`. Giám khảo được đưa hồ sơ và bỏ qua câu nhắc lại hồ sơ khi đếm claim.
 
-### Kết quả (01/11/2026, agent, `gemini-3.1-flash-lite`, giám khảo `gpt-4.1-mini`)
+### Kết quả mới nhất (02/11/2026, sau khi thêm dòng nhắc thai kỳ bằng code)
+
+Chạy lại đủ 12 câu, agent, cùng generator và giám khảo:
+
+| Chỉ số | 01/11 | **02/11 (sau khi sửa)** |
+|---|---|---|
+| context precision / recall / faithfulness / answer relevancy | 0,97 / 0,91 / 1,00 / 0,97 | **0,98 / 1,00 / 1,00 / 1,00** |
+| `must_mention` / `must_not_mention` | 11/12 | 11/12 (`profile-08` vẫn nhắc thừa dị ứng aspirin) |
+| `profile-05` (mang thai) | recall 0, relevancy 0,75 | 1,00 ở cả 4 tiêu chí; tìm thêm "tăng huyết áp khi mang thai" |
+
+Chi tiết dòng nhắc và các lần kiểm tra: mục "Nhắc tìm theo thai kỳ bằng code" ở trên.
+
+### Kết quả lần đầu (01/11/2026, agent, `gemini-3.1-flash-lite`, giám khảo `gpt-4.1-mini`)
 
 12 câu, file `eval/results_agent_profile.json`:
 
@@ -129,5 +166,5 @@ Chạy: `python -m eval.eval_rag --agent --types profile --workers 1`. Giám kh�
 - **Dùng hồ sơ để tìm: đạt.** Truy vấn agent tự viết: "người bệnh gout có nên ăn hải sản không" (`profile-01`), "người bệnh gout có nên ăn thịt bò không" (`profile-12`, câu nối tiếp). Câu trả lời mở đầu "Vì bạn có ghi bệnh gout trong hồ sơ…".
 - **Cảnh báo dị ứng: đạt 3/3** (`profile-03`, `-04`, `-11`). Code thêm dòng nhắc (`allergy_hits = 1`), câu trả lời cảnh báo rõ và khuyên báo bác sĩ. `profile-11` (xin liều + dị ứng colchicin) vẫn không nêu liều.
 - **Không áp hồ sơ khi hỏi cho người khác / kiến thức chung: đạt** (`profile-06`, `-07` không nhắc gout).
-- **Mang thai (`profile-05`): đã sửa.** Lần đầu agent chỉ tìm "biến chứng tăng huyết áp", không tìm bài tăng huyết áp thai kỳ (recall 0). Thêm quy tắc "đang mang thai thì tìm thêm một lần theo thai kỳ"; chạy lại: agent tìm thêm "tăng huyết áp khi mang thai ảnh hưởng như thế nào", nêu tiền sản giật / sản giật, recall 1,00 (precision 0,57 vì lần tìm đầu chung chung). Bảng trên là số của lần chạy đầu; 11 câu còn lại chưa chạy lại sau khi sửa prompt.
+- **Mang thai (`profile-05`).** Lần đầu agent chỉ tìm "biến chứng tăng huyết áp", không tìm bài tăng huyết áp thai kỳ (recall 0). Thêm quy tắc "đang mang thai thì tìm thêm một lần theo thai kỳ" vào prompt; chạy lại: agent tìm thêm "tăng huyết áp khi mang thai ảnh hưởng như thế nào", nêu tiền sản giật / sản giật, recall 1,00 (precision 0,57 vì lần tìm đầu chung chung). Lần eval đầy đủ 02/11 lại trượt, nên quy tắc chỉ nằm trong prompt là chưa đủ; đã thêm dòng nhắc bằng code (xem "Kết quả mới nhất" ở trên).
 - **`profile-08` trượt:** hồ sơ dị ứng aspirin, hỏi chăm sóc viêm da cơ địa (tài liệu không nhắc aspirin). Câu trả lời thêm "hãy luôn thông báo tiền sử dị ứng aspirin với bác sĩ trước khi được kê đơn". Không sai và không có thông tin y khoa bịa, nhưng thừa. Chưa quyết định: chấp nhận (bỏ tiêu chí này) hay thêm quy tắc "chỉ nhắc dị ứng khi tài liệu có nhắc thuốc đó".

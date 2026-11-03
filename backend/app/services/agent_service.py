@@ -131,7 +131,11 @@ class AgentService:
         yield from self._run(message, history, self._session(profile), {}, profile, trace)
 
     def _session(self, profile: UserProfile | None) -> ToolSession:
-        return ToolSession(self._retriever, allergies=profile.allergies if profile else None)
+        return ToolSession(
+            self._retriever,
+            allergies=profile.allergies if profile else None,
+            pregnant=bool(profile and profile.pregnant),
+        )
 
     def _run(
         self,
