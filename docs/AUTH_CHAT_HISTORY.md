@@ -2,7 +2,7 @@
 
 Người dùng phải đăng ký / đăng nhập mới chat được. Lịch sử hội thoại lưu theo tài khoản trong PostgreSQL, thay cho `localStorage` của trình duyệt.
 
-## Đã làm
+## Thiết kế
 
 ### Hạ tầng
 - `docker-compose.yml` ở thư mục gốc chạy **PostgreSQL 16** (`localhost:5432`) và **Adminer** để xem dữ liệu (`http://localhost:8080`).
@@ -39,7 +39,7 @@ Xóa user thì xóa luôn hội thoại và hồ sơ sức khỏe; xóa hội th
 | `app/schemas.py` | schema auth và hội thoại; `ChatRequest` dùng `conversation_id` |
 | `alembic/`, `alembic.ini` | migration |
 
-Chi tiết API: [README.md](../README.md#api). Chi tiết code: [backend/STRUCTURE.md](../backend/STRUCTURE.md).
+Chi tiết API: [API.md](API.md). Chi tiết code: [backend/STRUCTURE.md](../backend/STRUCTURE.md).
 
 **Quyết định thiết kế:**
 - Không có API "tạo hội thoại": hội thoại được tạo khi gửi câu hỏi đầu tiên. Stream phát sự kiện `conversation` `{id, title}` đầu tiên để frontend biết id.
@@ -52,18 +52,12 @@ Chi tiết API: [README.md](../README.md#api). Chi tiết code: [backend/STRUCTU
 | File | Nội dung |
 |---|---|
 | `api/chatApi.js` | lưu token, `apiFetch` gắn header `Authorization` (401 → xóa token, về màn đăng nhập), API auth và hội thoại |
-| `components/AuthScreen.jsx` | màn đăng nhập / đăng ký (mới) |
+| `components/AuthScreen.jsx` | màn đăng nhập / đăng ký |
 | `App.jsx` | danh sách hội thoại và tin nhắn lấy từ API, gửi `conversation_id` |
 | `components/Sidebar.jsx` | đổi tên, xóa hội thoại, tên user, đăng xuất |
 | `utils/sessions.js` | lời chào; tự xóa lịch sử chat cũ còn trong `localStorage` |
 
 Chi tiết: [frontend/STRUCTURE.md](../frontend/STRUCTURE.md).
-
-### Đã kiểm tra
-- Đăng ký 201, trùng email 409, sai định dạng 422. Đăng nhập sai 401, đúng 200. `/me` có token 200, không có hoặc sai token 401.
-- Chat với Gemini thật: câu đầu tạo hội thoại, câu sau hiểu ngữ cảnh, DB lưu đủ tin nhắn kèm `sources`.
-- User khác đọc hoặc chat vào hội thoại không phải của mình → 404. Đổi tên, xóa chạy đúng.
-- Frontend: lint và build sạch. Đăng ký từ giao diện đã tạo được tài khoản.
 
 ## Cài đặt
 
@@ -115,3 +109,11 @@ Chạy các lệnh trong `backend/` với venv đã kích hoạt. Trên Windows 
 - JWT không thu hồi được trước hạn. Muốn đăng xuất mọi người thì đổi `JWT_SECRET`.
 - Lịch sử chat cũ trong `localStorage` không được chuyển lên DB.
 - Mật khẩu Postgres trong `docker-compose.yml` chỉ dùng khi dev, phải đổi trước khi deploy.
+
+## Quyền riêng tư dữ liệu người dùng
+
+- Lịch sử chat là dữ liệu sức khỏe nhạy cảm, nên được lưu theo tài khoản trong PostgreSQL. Mỗi user chỉ đọc được hội thoại của mình, và có thể xóa từng hội thoại.
+- Hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) do user tự khai, không ghi vào log, xóa được bất cứ lúc nào. Khi user bật "dùng trong chat", hồ sơ được gửi cho Gemini kèm mỗi câu hỏi.
+- Trace (Langfuse Cloud, tắt mặc định) gửi ra máy chủ của Langfuse. Mặc định chỉ gửi tên bước, thời gian, token và id user dạng UUID; câu hỏi, hồ sơ và câu trả lời bị che. Không đặt `LANGFUSE_MASK_CONTENT=false` khi có người dùng thật.
+- Mật khẩu chỉ lưu dạng băm argon2. Token đăng nhập (JWT) được ký bằng `JWT_SECRET` và chỉ chứa id user.
+- `backend/.env` (API key, `JWT_SECRET`) không được commit. Mật khẩu PostgreSQL trong `docker-compose.yml` chỉ dùng khi dev trên máy, phải đổi trước khi deploy.

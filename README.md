@@ -1,8 +1,19 @@
 # ChatBot Y Tế
 
-Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-Augmented Generation): tìm các đoạn liên quan trong bài viết y khoa thu thập từ Vinmec, Medlatec và Báo Sức khỏe & Đời sống, rồi để Google Gemini sinh câu trả lời dựa trên các đoạn đó, kèm nguồn tham khảo.
+Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **Agentic RAG**: Gemini tự quyết định tìm tài liệu trong các bài viết y khoa thu thập từ Vinmec, Medlatec và Báo Sức khỏe & Đời sống, rồi trả lời dựa trên các đoạn tìm được, kèm nguồn tham khảo.
 
 > ⚠️ Đây là công cụ tham khảo thông tin, **không thay thế** chẩn đoán hay tư vấn của bác sĩ và chuyên gia y tế.
+
+## Ứng dụng làm được gì
+
+- **Hỏi đáp có trích nguồn** về 10 nhóm bệnh phổ biến (100 bài viết): triệu chứng, nguyên nhân, điều trị, chế độ ăn… Mỗi câu trả lời ghi `[Nguồn i]` và link bài gốc.
+- **Agent tự tìm tài liệu**: câu nhiều ý thì tìm riêng từng ý, câu nối tiếp ("Vậy điều trị thế nào?") hiểu theo lịch sử chat, lời chào thì trả lời ngay không tìm.
+- **Hồ sơ sức khỏe**: người dùng khai bệnh nền, dị ứng thuốc, năm sinh, mang thai; agent dùng để tìm đúng tài liệu và cảnh báo khi tài liệu nhắc tới thuốc dị ứng.
+- **Gợi ý nơi khám**: bệnh viện ở Hà Nội theo chuyên khoa, hiện thành thẻ có địa chỉ, số điện thoại đã kiểm tra trên trang chính thức.
+- **An toàn**: không bịa khi không có tài liệu ("chưa có thông tin"), không nêu liều thuốc (có guardrail che bằng code), khuyên gọi **115** ngay khi có dấu hiệu cấp cứu.
+- **Tài khoản và lịch sử chat** lưu trong PostgreSQL; câu trả lời hiện dần theo thời gian thực (SSE).
+
+Dữ liệu crawl thuộc về các trang nguồn, dự án chỉ dùng cho mục đích học tập / thử nghiệm ([data-collection/README.md](data-collection/README.md)).
 
 ## Kiến trúc
 
@@ -15,360 +26,134 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
  Frontend (React)  ──►  POST /api/chat/stream  ──►  kiểm tra token, đọc lịch sử hội thoại + hồ sơ sức khỏe từ PostgreSQL
    + token JWT          { message,               ──►  agent: Gemini tự gọi tool
                           conversation_id }          · tìm tài liệu (hybrid BM25 + dense, gộp RRF, rerank cross-encoder)
+                                                     · đọc cả bài / một mục
                                                      · gợi ý bệnh viện ở Hà Nội (khi người dùng hỏi nơi khám)
                                                                        │
- Frontend hiển thị  ◄──  SSE: sources, facilities,  ◄──  Gemini sinh câu trả lời
+ Frontend hiển thị  ◄──  SSE: sources, facilities,  ◄──  Gemini sinh câu trả lời ──► guardrail che liều thuốc
  câu trả lời, nguồn,      từng đoạn trả lời              từ tài liệu + lịch sử chat + hồ sơ
  thẻ nơi khám
                                                   ──►  trả lời xong: lưu câu hỏi + câu trả lời vào PostgreSQL
 ```
 
-| Thư mục                           | Vai trò                                       | Công nghệ                                                                             |
-| ----------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| [backend/](backend/)                 | API chat + pipeline RAG, đăng nhập, lưu lịch sử chat | FastAPI, OpenAI embedding, Gemini API, ChromaDB, BM25, ONNX Runtime (rerank), PostgreSQL (SQLAlchemy, Alembic), JWT |
-| [frontend/](frontend/)               | Giao diện đăng nhập + chat, danh sách hội thoại, hồ sơ sức khỏe, thẻ gợi ý nơi khám | React 19, Vite                                                                          |
-| [data-collection/](data-collection/) | Crawler thu thập dữ liệu y tế              | requests, BeautifulSoup                                                                 |
-| [docs/](docs/)                       | Tài liệu pipeline RAG, agent, cách đánh giá, đăng nhập + lịch sử chat, hồ sơ sức khỏe, gợi ý nơi khám | —                                                                                      |
-| [docker-compose.yml](docker-compose.yml) | PostgreSQL 16 + Adminer (xem dữ liệu)     | Docker                                                                                  |
-
-## Tài liệu
-
-- [docs/RAG.md](docs/RAG.md): pipeline RAG chi tiết, gồm dữ liệu, ingest, chunking, model, hybrid retrieval (BM25 + dense, RRF), rerank cross-encoder, cấu hình, hạn chế đã biết.
-- [docs/AGENTIC_RAG.md](docs/AGENTIC_RAG.md): agent tự gọi tool tìm tài liệu (bật mặc định), guardrail liều thuốc.
-- [docs/RAG_EVAL.md](docs/RAG_EVAL.md): bộ golden test, script đo retrieval và chấm end-to-end theo tiêu chí RAG, kết quả đo.
-- [docs/AUTH_CHAT_HISTORY.md](docs/AUTH_CHAT_HISTORY.md): đăng ký / đăng nhập (JWT) và lưu lịch sử chat bằng PostgreSQL. Ghi lại những gì đã làm, các bước cài đặt, thao tác thường dùng và cách xử lý lỗi.
-- [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md): hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) đưa vào prompt để agent tìm đúng tài liệu và cảnh báo dị ứng.
-- [docs/FACILITIES.md](docs/FACILITIES.md): gợi ý bệnh viện ở Hà Nội theo chuyên khoa (tool `find_healthcare_facility`), dữ liệu kiểm tra trên trang chính thức. Đi qua code từng bước: [docs/FACILITIES_WALKTHROUGH.md](docs/FACILITIES_WALKTHROUGH.md).
-- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): xem trace từng câu hỏi (lời gọi Gemini, tool, thời gian, token) và trace của eval bằng Langfuse Cloud; mặc định che nội dung.
-- [docs/DOCKER.md](docs/DOCKER.md): chạy demo toàn bộ app (DB, backend, frontend) bằng Docker trên một máy: `docker compose --profile app up -d --build` rồi mở http://localhost:3000.
-- [backend/STRUCTURE.md](backend/STRUCTURE.md): cấu trúc code backend và luồng xử lý một request.
-- [frontend/STRUCTURE.md](frontend/STRUCTURE.md): cấu trúc code frontend, luồng đăng nhập và gửi tin nhắn.
-- [data-collection/README.md](data-collection/README.md): crawler, nguồn dữ liệu, bản quyền.
-
-## Yêu cầu
-
-- **Python 3.11+**
-- **Node.js 20.19+ hoặc 22.12+** và npm (yêu cầu của Vite)
-- **Docker Desktop**: chạy PostgreSQL lưu tài khoản và lịch sử chat. Không cần cài PostgreSQL lên máy
-- **Gemini API key** — sinh câu trả lời (https://aistudio.google.com/apikey)
-- **OpenAI API key** — tạo embedding (https://platform.openai.com/api-keys). Chi phí rất nhỏ: embed toàn bộ dữ liệu 10 bệnh ~$0.006, mỗi câu hỏi không đáng kể.
+| Thành phần | Công nghệ |
+|---|---|
+| LLM | Gemini `gemini-3.1-flash-lite` (function calling) |
+| Embedding | OpenAI `text-embedding-3-small` |
+| Retrieval | ChromaDB + BM25, gộp RRF, rerank `bge-reranker-v2-m3` (ONNX Runtime, CPU) |
+| Backend | FastAPI, SQLAlchemy, Alembic, PostgreSQL 16, JWT (argon2) |
+| Frontend | React 19, Vite |
+| Crawler | requests, BeautifulSoup |
+| Vận hành | Docker Compose, nginx, Langfuse (trace) |
 
 ## Cài đặt & chạy
 
-Repo **không chứa** dữ liệu crawl và vector index (đã bỏ qua trong `.gitignore`), nên lần đầu cần làm đủ 4 bước dưới đây theo thứ tự.
+**Cần có:** Python 3.11+, Node.js 20.19+ hoặc 22.12+, Docker Desktop, [Gemini API key](https://aistudio.google.com/apikey), [OpenAI API key](https://platform.openai.com/api-keys) (embed toàn bộ dữ liệu ~$0,006).
 
-### Bước 1 — Thu thập dữ liệu
+Repo **không chứa** dữ liệu crawl và vector index, nên lần đầu cần làm đủ các bước dưới đây theo thứ tự.
+
+### 1. Thu thập dữ liệu
 
 ```bash
 cd data-collection
 python -m venv venv
 venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-
-python run_crawl.py --source all --limit 20     # chạy thử nhanh, mỗi nguồn 20 bài
+python run_crawl.py --source all --limit 20     # chạy thử nhanh; bộ đầy đủ: data-collection/README.md
 ```
 
-Để lấy bộ dữ liệu đầy đủ và các tuỳ chọn khác, xem [data-collection/README.md](data-collection/README.md). Backend mặc định đọc `data-collection/data/benh_pho_bien_10.jsonl` (100 bài của 10 nhóm bệnh phổ biến); đổi `DATA_PATH` để dùng file khác, vd `combined.jsonl` (2.306 bài).
+Backend mặc định đọc `data-collection/data/benh_pho_bien_10.jsonl` (đổi bằng `DATA_PATH`).
 
-### Bước 2 — Cấu hình & cài backend
+### 2. Cài backend và cấu hình
 
 ```bash
 cd backend
 python -m venv venv
-venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
+venv\Scripts\activate
 python -m pip install -r requirements.txt
-
 copy .env.example .env         # macOS/Linux: cp .env.example .env
-# Mở .env và điền GEMINI_API_KEY, OPENAI_API_KEY, JWT_SECRET
-python -c "import secrets; print(secrets.token_urlsafe(48))"   # tạo chuỗi ngẫu nhiên cho JWT_SECRET
+# Điền GEMINI_API_KEY, OPENAI_API_KEY, JWT_SECRET vào .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # tạo chuỗi cho JWT_SECRET
 ```
 
-> Trên máy bật Smart App Control (Windows 11), các file `pip.exe`, `uvicorn.exe`, `alembic.exe` trong venv có thể bị chặn. Luôn gọi qua Python: `python -m pip`, `python -m uvicorn`, `python -m alembic`.
+> Windows bật Smart App Control có thể chặn `pip.exe`, `uvicorn.exe`, `alembic.exe` trong venv. Luôn gọi qua Python: `python -m pip`, `python -m uvicorn`, `python -m alembic`.
 
-### Bước 2b: Database (PostgreSQL)
-
-Mở Docker Desktop, rồi chạy ở thư mục gốc của repo:
+### 3. Database và vector index
 
 ```bash
-docker compose up -d                 # PostgreSQL ở localhost:5432, Adminer ở http://localhost:8080
-
+docker compose up -d                 # ở thư mục gốc: PostgreSQL + Adminer (http://localhost:8080)
 cd backend
-python -m alembic upgrade head       # tạo / cập nhật bảng: users, conversations, messages, health_profiles
+python -m alembic upgrade head       # tạo / cập nhật bảng; chạy lại mỗi lần kéo code mới
+python -m app.scripts.ingest         # tạo vector index, ~1 phút
 ```
 
-**Mỗi lần kéo code mới, chạy lại `python -m alembic upgrade head`.** Code có migration mới mà DB chưa chạy thì backend báo lỗi kiểu `column messages.facilities does not exist`. DB đã mới nhất thì lệnh không làm gì.
+### 4. Chạy
 
-`DATABASE_URL` mặc định trong `.env.example` đã khớp với `docker-compose.yml`. Xem dữ liệu bằng Adminer: `http://localhost:8080`, **System = PostgreSQL**, Server `db`, user/mật khẩu `medical`/`medical`, database `medical_agent`.
-
-### Bước 3 — Tạo vector index (chạy 1 lần)
+**Cách A: chạy trực tiếp (để phát triển)**
 
 ```bash
-cd backend
-python -m app.scripts.ingest
+cd backend && python -m uvicorn main:app --reload --port 8000     # terminal 1
+cd frontend && npm install && npm run dev                         # terminal 2
 ```
 
-Script chia bài viết thành chunk theo từng mục (Triệu chứng, Điều trị…), tạo embedding bằng OpenAI `text-embedding-3-small` (32 chunk mỗi request) và lưu vào Chroma. Với dữ liệu 10 bệnh: 505 chunk, khoảng 1 phút. Chạy lại script sẽ xoá index cũ và tạo mới — sau đó **khởi động lại backend** để chỉ mục BM25 được dựng lại theo index mới.
+Mở http://localhost:5173, đăng ký tài khoản rồi chat. Swagger: http://localhost:8000/docs.
 
-### Bước 4 — Chạy backend và frontend
+**Cách B: Docker (để demo)**, sau khi đã có `backend/.env` và vector index:
 
 ```bash
-# Terminal 1 — backend
-cd backend
-python -m uvicorn main:app --reload --port 8000
-
-# Terminal 2 — frontend
-cd frontend
-npm install
-copy .env.example .env         # tuỳ chọn, chỉ cần khi backend không ở localhost:8000
-npm run dev
+docker compose --profile app up -d --build
 ```
 
-- Frontend: http://localhost:5173. Đăng ký tài khoản rồi chat. Lịch sử được lưu theo tài khoản.
-- Backend: http://localhost:8000. Swagger UI tại http://localhost:8000/docs, có nút **Authorize** để dán token khi thử API.
-- Nhớ bật Docker Desktop (`docker compose up -d`) trước khi chạy backend.
+Mở http://localhost:3000. Chi tiết và cách chép sẵn model rerank: [docs/DOCKER.md](docs/DOCKER.md).
 
-### Đánh giá chất lượng (tuỳ chọn)
-
-```bash
-cd backend
-python -m eval.eval_retrieval      # đo retrieval trên golden set, < $0.001
-python -m eval.eval_rag            # chấm toàn bộ pipeline bằng LLM giám khảo, ~10 phút
-python -m eval.eval_rag --agent --types profile,facility --workers 1   # chỉ câu hồ sơ sức khỏe + gợi ý nơi khám
-```
-
-Chi tiết và kết quả: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
-
-## Cấu hình
-
-### Backend — `backend/.env`
-
-| Biến                 | Mặc định                                        | Ý nghĩa                                                                           |
-| --------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `GEMINI_API_KEY`    | *(bắt buộc)*                                   | API key của Gemini                                                                 |
-| `GEMINI_MODEL`      | `gemini-3.1-flash-lite`                          | Model sinh câu trả lời và viết lại câu hỏi                                       |
-| `OPENAI_API_KEY`    | *(bắt buộc)*                                   | API key của OpenAI, dùng cho embedding                                            |
-| `EMBEDDING_MODEL`   | `text-embedding-3-small`                         | Model embedding (đổi thì phải chạy lại ingest)                                |
-| `DATA_PATH`         | `../data-collection/data/benh_pho_bien_10.jsonl` | File dữ liệu dùng để build index                                               |
-| `VECTOR_DB_PATH`    | `app/storage/chroma`                             | Nơi lưu Chroma                                                                    |
-| `VECTOR_COLLECTION` | `medical_documents`                              | Tên collection trong Chroma                                                        |
-| `RAG_TOP_K`         | `5`                                              | Số chunk đưa vào prompt cho mỗi câu hỏi                                      |
-| `RETRIEVAL_MODE`    | `hybrid`                                         | `hybrid` (BM25 + dense, gộp RRF) hoặc `dense`                                 |
-| `RERANK_ENABLED`    | `true`                                           | Rerank cross-encoder (~11 s/câu trên CPU, lần đầu tải model ~571 MB). Mọi số đo chất lượng đều dùng rerank; tắt thì nhanh hơn nhưng câu ngoài phạm vi không bị chặn ở retrieval |
-| `QUERY_REWRITE_ENABLED` | `true`                                       | Viết lại câu hỏi nối tiếp ("Vậy điều trị thế nào?") thành câu độc lập trước khi tìm tài liệu — thêm 1 lần gọi Gemini (~1 s) khi đã có lịch sử |
-| `HISTORY_MAX_TURNS` | `10`                                             | Số lượt hỏi–đáp gần nhất gửi kèm (1 lượt = 1 câu hỏi + 1 câu trả lời)         |
-| `AGENT_ENABLED` | `true` | Dùng agent: Gemini tự gọi tool tìm tài liệu, 0 đến nhiều lần (xem [docs/AGENTIC_RAG.md](docs/AGENTIC_RAG.md)). `false` = pipeline cố định, gọi Gemini ít hơn (hợp khi quota hạn chế) |
-| `AGENT_MAX_TOOL_CALLS` | `3` | Số lần tìm tài liệu tối đa cho mỗi câu hỏi (mỗi lần ~12 s vì rerank) |
-| `AGENT_MAX_TOTAL_CALLS` | `8` | Số lời gọi tool tối đa, kể cả đọc bài (`get_article`) |
-| `AGENT_FOLLOWUP_RERANK_CANDIDATES` | `5` | Số ứng viên rerank từ lần tìm thứ hai trong một câu hỏi (lần đầu dùng `RERANK_CANDIDATES`) |
-| `DOSE_GUARDRAIL` | `true` | Quét câu trả lời của agent, che liều thuốc (hàm lượng, số lần/ngày) trước khi gửi tới người dùng |
-| `AGENT_NO_CONTEXT_GUARD` | `true` | Agent không lấy được tài liệu nào thì trả lời bằng prompt "không có tài liệu" như pipeline cũ |
-| `CORS_ORIGINS`      | `http://localhost:5173,http://127.0.0.1:5173`    | Các origin frontend được phép gọi API                                         |
-| `DATABASE_URL`      | `postgresql+pg8000://medical:medical@localhost:5432/medical_agent` | PostgreSQL lưu tài khoản và lịch sử chat. Dùng driver `pg8000` (thuần Python) vì Windows có thể chặn DLL của `psycopg` |
-| `JWT_SECRET`        | *(bắt buộc)*                                   | Khóa ký token đăng nhập. Đổi khóa thì mọi người dùng phải đăng nhập lại        |
-| `JWT_EXPIRE_DAYS`   | `7`                                              | Số ngày token còn hiệu lực, hết hạn thì phải đăng nhập lại                     |
-| `LANGFUSE_ENABLED` | `false` | Gửi trace lên Langfuse Cloud ([docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)). Cần thêm `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` |
-| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Vùng EU; project ở vùng US thì dùng `https://us.cloud.langfuse.com`. Tên cũ `LANGFUSE_HOST` vẫn đọc được |
-| `LANGFUSE_MASK_CONTENT` | `true` | Che câu hỏi, hồ sơ, tài liệu, câu trả lời trong trace (chỉ gửi tên bước, thời gian, token). Trace của eval luôn gửi đủ nội dung |
-
-Các biến còn lại (`RAG_MIN_SCORE`, `RAG_CANDIDATES`, `RRF_K`, `RERANK_*`): xem mục "Cấu hình liên quan" trong [docs/RAG.md](docs/RAG.md).
-
-### Frontend — `frontend/.env`
-
-| Biến                 | Mặc định               | Ý nghĩa          |
-| --------------------- | ------------------------- | ------------------ |
-| `VITE_API_BASE_URL` | `http://localhost:8000` | Địa chỉ backend |
-
-## API
-
-Mọi API trừ đăng ký / đăng nhập đều **bắt buộc đăng nhập**: gửi header `Authorization: Bearer <access_token>`. Thiếu, sai hoặc hết hạn token thì nhận `401`. `GET /` trả về `{"status": "ok"}` để kiểm tra server còn sống.
-
-### Đăng nhập
-
-| API | Body | Trả về |
-|---|---|---|
-| `POST /api/auth/register` | `{ email, password (8–128 ký tự), display_name }` | `201` thông tin user. Email đã có thì `409`, sai định dạng thì `422` |
-| `POST /api/auth/login` | `{ email, password }` | `{ access_token, token_type: "bearer", user }`. Sai email hoặc mật khẩu thì `401` |
-| `GET /api/auth/me` | (không có) | Thông tin user của token: `{ id, email, display_name, created_at }` |
-
-### Hội thoại
-
-| API | Ý nghĩa |
-|---|---|
-| `GET /api/conversations` | Danh sách hội thoại của user, mới nhất trước: `[{ id, title, created_at, updated_at }]` |
-| `GET /api/conversations/{id}/messages` | Tin nhắn theo thứ tự: `[{ id, role: "user"\|"model", content, sources, facilities, created_at }]` |
-| `PATCH /api/conversations/{id}` | Đổi tên, body `{ title }` |
-| `DELETE /api/conversations/{id}` | Xóa hội thoại kèm toàn bộ tin nhắn (`204`) |
-
-Hội thoại của user khác trả `404`. Không có API tạo hội thoại: hội thoại được tạo khi gửi câu hỏi đầu tiên.
-
-### Hồ sơ sức khỏe
-
-| API | Ý nghĩa |
-|---|---|
-| `GET /api/profile` | Hồ sơ của user: `{ birth_year, pregnant, conditions, allergies, use_in_chat, updated_at }`. Chưa có thì hồ sơ rỗng, `updated_at: null` |
-| `PUT /api/profile` | Lưu cả hồ sơ (tạo hoặc ghi đè), body như trên trừ `updated_at` |
-| `DELETE /api/profile` | Xóa hồ sơ (`204`) |
-| `GET /api/profile/options` | `{ conditions }`: các nhóm bệnh có trong dữ liệu, để gợi ý ở form |
-
-Chi tiết: [docs/HEALTH_PROFILE.md](docs/HEALTH_PROFILE.md).
-
-### Gợi ý nơi khám
-
-| API | Ý nghĩa |
-|---|---|
-| `GET /api/facilities?specialty=&emergency=&for_child=&limit=` | Bệnh viện ở Hà Nội theo chuyên khoa, cùng logic với tool của agent |
-| `GET /api/facilities/specialties` | Mã chuyên khoa → tên, nhóm bệnh → chuyên khoa |
-
-Chi tiết: [docs/FACILITIES.md](docs/FACILITIES.md).
-
-### `POST /api/chat`
-
-Request:
-
-```json
-{
-  "message": "Triệu chứng của cơn gout cấp là gì?",
-  "conversation_id": "9f3a…"
-}
-```
-
-Response:
-
-```json
-{
-  "reply": "…",
-  "sources": [
-    { "title": "…", "url": "https://…", "citation": "Theo Báo Sức khỏe & Đời sống - …" }
-  ],
-  "facilities": [],
-  "disclaimer": "Thông tin trên chỉ mang tính tham khảo, không thay thế …"
-}
-```
-
-- `conversation_id` để trống (hoặc `null`) ở câu hỏi đầu tiên thì server tạo hội thoại mới, tiêu đề lấy từ câu hỏi.
-- Server tự đọc lịch sử (`HISTORY_MAX_TURNS` lượt gần nhất) và hồ sơ sức khỏe (nếu user bật "dùng trong chat") từ DB. Client **không gửi** `history`.
-- `facilities`: thẻ bệnh viện agent gợi ý khi người dùng hỏi nơi khám, rỗng ở các câu khác.
-- Trả lời xong, server lưu câu hỏi và câu trả lời (kèm `sources`, `facilities`) vào DB. Lỗi giữa chừng thì không lưu gì.
-- Lỗi: `401` khi chưa đăng nhập, `404` khi hội thoại không thuộc user, `500` khi cấu hình sai (vd. thiếu API key), `502` khi gọi Gemini thất bại (mạng, quota, key sai, model không tồn tại).
-
-### `POST /api/chat/stream`
-
-Cùng request với `/api/chat`, nhưng trả về **Server-Sent Events** để hiển thị câu trả lời dần dần (frontend dùng endpoint này). Các sự kiện theo thứ tự:
-
-| Sự kiện | `data` | Ý nghĩa |
-|---|---|---|
-| `conversation` | `{"id": "…", "title": "…"}` | Luôn đến đầu tiên: id của hội thoại (id mới nếu vừa tạo) |
-| `status` | `{"stage": "thinking" \| "retrieving" \| "reading" \| "finding_facility" \| "generating", …}` | Bước đang chạy. Agent gửi kèm `query` khi tìm, `document_id` khi đọc bài |
-| `sources` | `{"sources": [{title, url, citation}]}` | Nguồn tham khảo. Agent gửi lại sau mỗi lần gọi tool, mỗi lần là danh sách đầy đủ |
-| `facilities` | `{"facilities": [{name, address, phones, maps_url, …}]}` | Chỉ khi agent gợi ý nơi khám: thẻ bệnh viện, danh sách đầy đủ tới lúc đó |
-| `delta` | `{"text": "…"}` | Một đoạn câu trả lời. Nối các `delta` lại thành câu trả lời đầy đủ |
-| `done` | `{"disclaimer": "…"}` | Kết thúc, lượt chat đã được lưu |
-| `error` | `{"detail": "…"}` | Lỗi khi stream đã bắt đầu (HTTP status lúc đó đã là 200). Lượt này không được lưu |
-
-Lỗi `401` / `404` / `500` (chưa đăng nhập, hội thoại không thuộc user, thiếu API key…) vẫn trả về bằng HTTP status trước khi mở stream.
+Bảng biến cấu hình và cách xử lý lỗi thường gặp: [docs/CONFIG.md](docs/CONFIG.md). Danh sách API: [docs/API.md](docs/API.md).
 
 ## Cấu trúc thư mục
 
-```
-.
-├── docker-compose.yml            # PostgreSQL 16 + Adminer; profile "app" thêm backend + frontend (docs/DOCKER.md)
-├── backend/
-│   ├── Dockerfile, .dockerignore # Image backend (docs/DOCKER.md)
-│   ├── main.py                   # Khởi tạo FastAPI + CORS, gắn router auth / conversations / chat / profile / facilities
-│   ├── requirements.txt
-│   ├── .env.example
-│   ├── alembic.ini, alembic/     # Migration tạo / sửa bảng PostgreSQL
-│   ├── STRUCTURE.md              # Giải thích cấu trúc backend
-│   ├── app/
-│   │   ├── config.py             # Settings đọc từ .env
-│   │   ├── schemas.py            # Pydantic models (request/response)
-│   │   ├── db.py                 # Kết nối PostgreSQL (SQLAlchemy engine, session)
-│   │   ├── models.py             # Bảng users, conversations, messages, health_profiles
-│   │   ├── security.py           # Băm mật khẩu (argon2), JWT, get_current_user
-│   │   ├── observability.py      # Trace lên Langfuse (tắt mặc định, che nội dung)
-│   │   ├── routers/
-│   │   │   ├── auth.py           # Đăng ký, đăng nhập, /me
-│   │   │   ├── conversations.py  # Danh sách / tin nhắn / đổi tên / xoá hội thoại
-│   │   │   ├── profile.py        # Hồ sơ sức khỏe
-│   │   │   ├── facilities.py     # Gợi ý bệnh viện ở Hà Nội
-│   │   │   └── chat.py           # POST /api/chat, POST /api/chat/stream (SSE), lưu lịch sử
-│   │   ├── services/
-│   │   │   ├── rag_service.py    # Điều phối: retrieve → gọi Gemini → gom nguồn
-│   │   │   ├── agent_service.py  # Agent: Gemini tự gọi tool (mặc định)
-│   │   │   ├── facility_service.py # Tìm bệnh viện theo chuyên khoa
-│   │   │   └── gemini_service.py # Gọi Gemini, chứa system prompt an toàn y tế
-│   │   ├── data/facilities_hanoi.jsonl # 24 bệnh viện ở Hà Nội, kiểm tra trên trang chính thức
-│   │   ├── rag/
-│   │   │   ├── loader.py         # Đọc JSONL
-│   │   │   ├── chunker.py        # Chia chunk theo section
-│   │   │   ├── embeddings.py     # OpenAI embedding
-│   │   │   ├── vector_store.py   # Bọc ChromaDB
-│   │   │   ├── bm25.py           # Chỉ mục BM25 trong RAM (tìm theo từ khoá)
-│   │   │   ├── retriever.py      # Hybrid BM25 + dense, gộp RRF, ngưỡng, gọi rerank
-│   │   │   ├── reranker.py       # Cross-encoder bge-reranker-v2-m3 (ONNX)
-│   │   │   ├── prompt.py         # Ghép context + câu hỏi thành prompt
-│   │   │   ├── profile.py        # Hồ sơ sức khỏe → prompt, quét thuốc dị ứng
-│   │   │   ├── tools.py          # Tool của agent: tìm tài liệu, đọc bài, gợi ý nơi khám
-│   │   │   └── guardrail.py      # Che liều thuốc trong câu trả lời
-│   │   └── scripts/ingest.py     # Tạo vector index
-│   └── eval/
-│       ├── golden_set.jsonl      # 108 câu hỏi chuẩn
-│       ├── eval_retrieval.py     # Đo retrieval
-│       └── eval_rag.py           # Chấm end-to-end bằng LLM giám khảo
-├── docs/                         # RAG.md, AGENTIC_RAG.md, RAG_EVAL.md, AUTH_CHAT_HISTORY.md, HEALTH_PROFILE.md, FACILITIES.md, FACILITIES_WALKTHROUGH.md, OBSERVABILITY.md
-├── frontend/
-│   ├── Dockerfile, nginx.conf    # Image frontend: build Vite + nginx chuyển /api sang backend (docs/DOCKER.md)
-│   └── src/
-│       ├── App.jsx               # Đăng nhập, danh sách hội thoại, gửi tin nhắn
-│       ├── api/chatApi.js        # Gọi backend (gắn token, xử lý 401)
-│       ├── components/           # AuthScreen, Sidebar, MessageBubble, ChatInput, ProfileModal, FacilityCards
-│       └── utils/sessions.js     # Lời chào, đổi tin nhắn từ API sang dạng hiển thị
-└── data-collection/
-    ├── run_crawl.py              # CLI chạy crawler
-    ├── crawlers/                 # vinmec.py, medlatec.py, suckhoedoisong.py
-    ├── config.py, utils.py
-    └── data/                     # Kết quả crawl (không nằm trong git)
+| Thư mục | Nội dung |
+|---|---|
+| [backend/](backend/) | FastAPI: `app/routers` (API), `app/services` (agent, RAG, Gemini, gợi ý nơi khám), `app/rag` (chunk, embedding, BM25, retriever, rerank, prompt, tool, guardrail), `alembic/` (migration), `eval/` (golden set + script đo). Chi tiết: [backend/STRUCTURE.md](backend/STRUCTURE.md) |
+| [frontend/](frontend/) | React + Vite: màn đăng nhập, chat, danh sách hội thoại, hồ sơ sức khỏe, thẻ nơi khám. Chi tiết: [frontend/STRUCTURE.md](frontend/STRUCTURE.md) |
+| [data-collection/](data-collection/) | Crawler 3 nguồn; dữ liệu crawl không nằm trong git |
+| [docs/](docs/) | Tài liệu thiết kế (RAG, agent, hồ sơ sức khỏe, gợi ý nơi khám), đánh giá, cấu hình, API, Docker, trace |
+| `docker-compose.yml` | PostgreSQL + Adminer; profile `app` thêm backend + frontend |
+
+## Đánh giá
+
+### Tập đánh giá
+
+Golden set **108 câu** ([backend/eval/golden_set.jsonl](backend/eval/golden_set.jsonl)), đáp án tham chiếu trích từ chính các bài trong dữ liệu:
+
+| Loại câu | Số câu | Kiểm tra |
+|---|---|---|
+| `factual`, `specific` | 32 + 20 | Kiến thức nền và chi tiết trong một bài |
+| `multi_doc`, `article` | 10 + 2 | Cần ghép nhiều bài / nhiều mục |
+| `follow_up` | 8 | Câu nối tiếp, có lịch sử chat |
+| `profile` | 12 | Dùng hồ sơ sức khỏe đúng lúc, cảnh báo dị ứng, thai kỳ |
+| `facility` | 8 | Gợi ý nơi khám đúng chuyên khoa, không bịa số điện thoại |
+| `safety` | 7 | Từ chối kê liều, khuyên gọi 115 khi cấp cứu |
+| `out_of_kb`, `off_topic`, `no_search`, `disambiguation` | 3 + 2 + 3 + 1 | Ngoài dữ liệu, ngoài lĩnh vực, lời chào, phân biệt bệnh gần nhau |
+
+Hai script:
+
+```bash
+cd backend
+python -m eval.eval_retrieval --rerank          # bước tìm tài liệu: hit@k, MRR (chấm theo nhãn, ~30 phút trên CPU)
+python -m eval.eval_rag --agent --workers 1     # cả hệ thống: 4 tiêu chí RAGAS, giám khảo gpt-4.1-mini (~45 phút)
 ```
 
-## Cách chatbot trả lời an toàn
+### Kết quả (02/11/2026)
 
-- Prompt RAG yêu cầu Gemini **chỉ trả lời dựa trên context** tìm được; nếu không đủ thông tin thì nói rõ là chưa tìm thấy, không bịa. Đo trên golden set: 5/5 câu ngoài phạm vi dữ liệu đều được trả lời "chưa tìm thấy thông tin".
-- Không chẩn đoán cá nhân, không kê đơn hay liều thuốc; khuyên gọi **115** hoặc đến cơ sở y tế khi có dấu hiệu cấp cứu.
-- Mỗi câu trả lời kèm danh sách nguồn (link bài gốc) và câu disclaimer cố định.
-- Liều thuốc lọt vào câu trả lời bị guardrail che bằng code trước khi tới người dùng.
-- Thuốc người dùng ghi dị ứng trong hồ sơ: code quét tài liệu và buộc câu trả lời cảnh báo.
-- Gợi ý nơi khám: địa chỉ, số điện thoại lấy từ dữ liệu đã kiểm tra trên trang chính thức, **không do model viết**; không xếp hạng bệnh viện; câu cấp cứu vẫn khuyên gọi 115 trước.
+| Chỉ số (108 câu) | Điểm |
+|---|---|
+| context_precision | **0,97** |
+| context_recall | **0,97** |
+| faithfulness | **0,99** |
+| answer_relevancy | **1,00** |
+| Retrieval, 70 câu gốc: hit@1 / hit@5 / MRR | 0,91 / 0,95 / 0,93 |
 
-## Dữ liệu người dùng
+- **An toàn:** 0 lần nêu liều thuốc trên 108 câu; câu cấp cứu luôn khuyên gọi 115 ở câu đầu; 5/5 câu ngoài phạm vi bị chặn ngay ở bước tìm tài liệu.
+- **Hành vi agent:** gợi ý nơi khám 8/8 gọi đúng tool; các quy tắc bắt buộc nhắc / cấm nhắc 19/19; không có lần tìm thừa.
+- **Thời gian trả lời** trung vị ~20 s mỗi câu, phần lớn do rerank trên CPU.
+- So với bản đầu (dense retrieval, 27/09): context_precision 0,81 → 0,97; câu nối tiếp hit@1 0,40 → 1,00.
 
-- Lịch sử chat là dữ liệu sức khỏe nhạy cảm, nên được lưu theo tài khoản trong PostgreSQL. Mỗi user chỉ đọc được hội thoại của mình, và có thể xóa từng hội thoại.
-- Hồ sơ sức khỏe (bệnh nền, dị ứng thuốc, năm sinh, mang thai) do user tự khai, không ghi vào log, xóa được bất cứ lúc nào. Khi user bật "dùng trong chat", hồ sơ được gửi cho Gemini kèm mỗi câu hỏi.
-- Trace (Langfuse Cloud, tắt mặc định) gửi ra máy chủ của Langfuse. Mặc định chỉ gửi tên bước, thời gian, token và id user dạng UUID; câu hỏi, hồ sơ và câu trả lời bị che. Không đặt `LANGFUSE_MASK_CONTENT=false` khi có người dùng thật.
-- Mật khẩu chỉ lưu dạng băm argon2. Token đăng nhập (JWT) được ký bằng `JWT_SECRET` và chỉ chứa id user.
-- `backend/.env` (API key, `JWT_SECRET`) không được commit. Mật khẩu PostgreSQL trong `docker-compose.yml` chỉ dùng khi dev trên máy, phải đổi trước khi deploy.
-
-## Xử lý sự cố
-
-| Triệu chứng                                                                          | Nguyên nhân thường gặp                                                                                                                       |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Thiếu GEMINI_API_KEY` / `Thiếu OPENAI_API_KEY`                                  | Chưa tạo`backend/.env` hoặc chưa điền key                                                                                                 |
-| `Extra inputs are not permitted` khi khởi động                                    | `.env` có biến mà `Settings` trong `app/config.py` không khai báo — kiểm tra lại tên biến                                         |
-| `Không tìm thấy file dữ liệu` khi build index                                   | Chưa crawl (Bước 1) hoặc sai`DATA_PATH`; lệnh phải chạy từ thư mục `backend/`                                                       |
-| Lỗi lệch số chiều vector khi chat                                                  | Index được tạo bằng model embedding khác — chạy lại`python -m app.scripts.ingest`                                                      |
-| Bot luôn trả lời "chưa tìm thấy thông tin"                                      | Chưa build index (Bước 3), hoặc ngưỡng`RAG_MIN_SCORE` / `RERANK_MIN_SCORE` quá cao                                                     |
-| `Fatal error in launcher: Unable to create process…` khi gọi `pip` / `uvicorn` | Thư mục dự án bị đổi tên/di chuyển sau khi tạo venv. Dùng`python -m pip …`, `python -m uvicorn …`, hoặc xoá và tạo lại venv |
-| Trả lời rất chậm                                                                   | Rerank (bật mặc định) mất ~11 s/câu trên CPU; câu hỏi đầu tiên sau khi khởi động còn phải tải/nạp model. Cần nhanh hơn thì đặt `RERANK_ENABLED=false` (chất lượng giảm, xem [docs/RAG.md](docs/RAG.md)) |
-| `502` — model not found / quota exceeded                                            | Đổi`GEMINI_MODEL` sang model còn được hỗ trợ trong tài khoản của bạn, hoặc chờ hết giới hạn quota                              |
-| Frontend báo lỗi mạng / CORS                                                        | Backend chưa chạy, hoặc`CORS_ORIGINS` chưa gồm origin của frontend                                                                        |
-| `Connection refused` / `Can't create a connection to host localhost and port 5432` | Docker Desktop chưa mở, hoặc container `db` đã dừng. Mở Docker Desktop rồi chạy `docker compose up -d` |
-| `DLL load failed while importing pq: An Application Control policy has blocked this file` | Windows chặn DLL của `psycopg`. Dùng driver `pg8000` (`postgresql+pg8000://…` trong `DATABASE_URL`) |
-| `An Application Control policy has blocked this file` khi chạy `pip` / `uvicorn` / `alembic` | Dùng `python -m pip …`, `python -m uvicorn …`, `python -m alembic …` |
-| `RuntimeError: Chưa đặt JWT_SECRET`                                               | Thêm `JWT_SECRET` vào `backend/.env` rồi khởi động lại backend |
-| Adminer báo `Connection refused`                                                   | Ô System đang là MySQL. Chọn **PostgreSQL** |
-| `relation "users" does not exist`                                                  | Chưa tạo bảng: `python -m alembic upgrade head` trong `backend/` |
-| `column messages.facilities does not exist` / `relation "health_profiles" does not exist` | Code mới hơn DB, còn migration chưa chạy: `python -m alembic upgrade head` trong `backend/` (chỉ thêm bảng / cột, không mất dữ liệu) |
-| Đang dùng bị đưa về màn đăng nhập "Phiên đăng nhập đã hết hạn"                     | Token quá `JWT_EXPIRE_DAYS` ngày, hoặc `JWT_SECRET` vừa bị đổi. Đăng nhập lại; lịch sử vẫn còn |
-
-## Bản quyền dữ liệu
-
-Nội dung crawl thuộc về Vinmec, MEDLATEC và Báo Sức khỏe & Đời sống; dự án chỉ dùng cho mục đích học tập/thử nghiệm cá nhân. Dữ liệu từ suckhoedoisong.vn yêu cầu trích dẫn nguồn khi dùng cho AI/RAG (trường `citation` đã có sẵn trong dữ liệu). Chi tiết xem [data-collection/README.md](data-collection/README.md).
+Bộ test là bộ nội bộ, chưa có chuyên gia y tế duyệt; dùng để so các phiên bản của chatbot này, không phải benchmark. Chi tiết từng loại câu, lỗi đã sửa và vấn đề còn mở: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
