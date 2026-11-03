@@ -2,7 +2,7 @@
 
 Chạy toàn bộ app (PostgreSQL, backend, frontend) bằng Docker trên một máy, để demo. Bản này **không dành cho deploy lên server**: mật khẩu DB để mặc định, cổng DB và Adminer mở ra ngoài.
 
-Muốn dev (sửa code, tự load lại) thì vẫn chạy backend và frontend trực tiếp như trong [README](../README.md#cài-đặt--chạy).
+Muốn dev (sửa code, tự load lại) thì vẫn chạy backend và frontend trực tiếp như trong [README](../README.md#cài-đặt--chạy) (cách A).
 
 ## Kiến trúc
 

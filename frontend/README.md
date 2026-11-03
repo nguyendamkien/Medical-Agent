@@ -1,6 +1,6 @@
 # Frontend — ChatBot Y Tế
 
-Giao diện chat viết bằng React 19 + Vite. Gọi các API `/api/auth/*`, `/api/conversations*`, `/api/profile*` và `POST /api/chat/stream` của backend (xem [README gốc](../README.md)). Chi tiết code: [STRUCTURE.md](STRUCTURE.md).
+Giao diện chat viết bằng React 19 + Vite. Gọi các API `/api/auth/*`, `/api/conversations*`, `/api/profile*` và `POST /api/chat/stream` của backend (xem [docs/API.md](../docs/API.md)). Chi tiết code: [STRUCTURE.md](STRUCTURE.md).
 
 ## Tính năng
 

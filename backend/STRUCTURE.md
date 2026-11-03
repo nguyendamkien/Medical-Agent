@@ -143,7 +143,7 @@ Mặc định (`AGENT_ENABLED=true`, từ 21/10/2026), `routers/chat.py` gọi `
 ### `app/config.py`
 - Class `Settings` kế thừa `pydantic_settings.BaseSettings` — đọc biến môi trường **hoặc** file `.env`, không phân biệt hoa thường tên biến.
 - Biến `.env` không khai báo trong `Settings` sẽ gây lỗi `Extra inputs are not permitted` khi khởi động.
-- Các nhóm cấu hình: API key và model (Gemini, OpenAI embedding), Chroma, dữ liệu, retrieval (`RAG_TOP_K`, `RAG_MIN_SCORE`, `RETRIEVAL_MODE`, `RAG_CANDIDATES`, `RRF_K`), rerank (`RERANK_*`), CORS, PostgreSQL (`DATABASE_URL`), đăng nhập (`JWT_SECRET`, `JWT_EXPIRE_DAYS`). Bảng đầy đủ: [../docs/RAG.md](../docs/RAG.md) và [../README.md](../README.md).
+- Các nhóm cấu hình: API key và model (Gemini, OpenAI embedding), Chroma, dữ liệu, retrieval (`RAG_TOP_K`, `RAG_MIN_SCORE`, `RETRIEVAL_MODE`, `RAG_CANDIDATES`, `RRF_K`), rerank (`RERANK_*`), CORS, PostgreSQL (`DATABASE_URL`), đăng nhập (`JWT_SECRET`, `JWT_EXPIRE_DAYS`). Bảng đầy đủ: [../docs/CONFIG.md](../docs/CONFIG.md) và [../docs/RAG.md](../docs/RAG.md).
 - `get_settings()` được bọc `@lru_cache` — chỉ đọc `.env` **một lần** cho cả vòng đời app. Đổi `.env` thì phải khởi động lại server.
 
 ### `app/schemas.py`
